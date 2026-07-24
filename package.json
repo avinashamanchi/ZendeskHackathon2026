@@ -1,0 +1,32 @@
+{
+  "name": "point",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Point — support that reads the account, not the sentence. Built for people with expressive aphasia.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "check": "tsx scripts/check.ts",
+    "generate:corpus": "tsx scripts/generate-corpus.ts",
+    "generate:rules": "tsx scripts/generate-rules.ts"
+  },
+  "dependencies": {
+    "@composio/core": "^0.14.0",
+    "next": "^14.2.35",
+    "openai": "^5.23.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@axe-core/react": "^4.10.2",
+    "@types/node": "^20.19.0",
+    "@types/react": "^18.3.23",
+    "@types/react-dom": "^18.3.7",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  }
+}

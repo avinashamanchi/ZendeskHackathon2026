@@ -1,0 +1,75 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* The palette carries the thesis: --signal appears only on the Point side.
+   --edge-strong exists because #DDE1E6 fails the 3:1 non-text contrast bar;
+   decorative dividers may use --edge, but the card boundary is a control and
+   uses --edge-strong (≥3:1 on white). */
+:root {
+  --ink: #14181f;
+  --ink-soft: #4a5462;
+  --paper: #fbfbf9;
+  --card: #ffffff;
+  --edge: #dde1e6;
+  --edge-strong: #7c8694;
+  --signal: #1b4d8f;
+  --signal-bg: #eaf1fa;
+  --stale: #6b7280;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+/* Focus is visible, always. Never outline: none. */
+:focus-visible {
+  outline: 3px solid var(--signal);
+  outline-offset: 2px;
+}
+
+::placeholder {
+  color: var(--stale);
+  opacity: 1;
+}
+
+/* Staged reveal: cards fade and rise 12px over 200ms. */
+.card-reveal {
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    opacity 200ms ease-out,
+    transform 200ms ease-out;
+}
+.card-reveal.is-shown {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Respect prefers-reduced-motion throughout: no transitions, final state
+   immediately. The JS timeline checks the same query and skips its steps. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+  .card-reveal {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

@@ -4,7 +4,8 @@ import { useEffect, useRef } from "react";
 import type { ActReceipt } from "@/lib/types";
 
 // The resolution, stated plainly. Active voice, no apologies, no hedging.
-// Focus lands on "Start again" so a keyboard-only run never strands.
+// Announcement comes from the page's persistent aria-live region; focus
+// lands on "Start again" so a keyboard-only run never strands.
 
 export default function Receipt({
   receipt,
@@ -19,7 +20,7 @@ export default function Receipt({
   }, []);
 
   return (
-    <div role="status" className="flex flex-col items-start gap-4 pt-2">
+    <div className="flex flex-col items-start gap-4 pt-2">
       <p className="flex items-start gap-3 text-[32px] font-bold leading-tight text-ink">
         <span
           aria-hidden="true"

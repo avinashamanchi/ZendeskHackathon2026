@@ -19,8 +19,10 @@ const DAY = 86_400_000;
 
 export function recencyBoost(occurredAt: Date): number {
   const age = Date.now() - occurredAt.getTime();
-  if (age <= 72 * HOUR) return 0.5;
-  if (age <= 7 * DAY) return 0.25;
+  // Strict inequalities: fixtures are rebuilt per call, so an anomaly pinned
+  // at exactly -72h must land on the same side of the boundary every run.
+  if (age < 72 * HOUR) return 0.5;
+  if (age < 7 * DAY) return 0.25;
   return 0;
 }
 
@@ -81,7 +83,17 @@ async function semanticScores(
     return { scores, source: "none" };
   }
 
-  // Rung 1 — live Octen embeddings (only outside demo mode, only if configured).
+  // Rung 1 — the precomputed table for the golden-path fragments. It applies
+  // in live mode too: it IS the locked tuning (III.6 "tune and lock"), so the
+  // stage paths are deterministic regardless of what live cosines drift to.
+  // Octen still runs live for every other fragment.
+  const locked = PRECOMPUTED[normalized];
+  if (locked) {
+    for (const h of hypotheses) scores.set(h.id, locked[h.kind] ?? 0);
+    return { scores, source: "precomputed" };
+  }
+
+  // Rung 2 — live Octen embeddings (only outside demo mode, only if configured).
   if (!demoMode && octenConfigured()) {
     try {
       const docs = hypotheses.map((h) => ({
@@ -105,13 +117,6 @@ async function semanticScores(
     } catch (err) {
       console.warn("[point] Octen unavailable, falling back:", err);
     }
-  }
-
-  // Rung 2 — the precomputed table for the golden-path fragments.
-  const table = PRECOMPUTED[normalized];
-  if (table) {
-    for (const h of hypotheses) scores.set(h.id, table[h.kind] ?? 0);
-    return { scores, source: "precomputed" };
   }
 
   // Rung 3 — keyword overlap for everything else.

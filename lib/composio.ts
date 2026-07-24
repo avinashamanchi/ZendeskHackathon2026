@@ -17,7 +17,9 @@ import { demoReceipt } from "./receipts";
 // external call in this app, collapse to fixtures on any failure.
 
 const USER_ID = process.env.COMPOSIO_USER_ID ?? "default";
-const READ_TIMEOUT_MS = 2500;
+// Reads sit on the resolve critical path (3-second card budget); keep them
+// short. The write happens after the tap, off any reveal timeline.
+const READ_TIMEOUT_MS = 1500;
 const WRITE_TIMEOUT_MS = 4000;
 
 const SLUGS = {

@@ -44,20 +44,30 @@ function plainName(order: Order): string {
 
 function detectDuplicateCharge(state: AccountState): Hypothesis[] {
   const out: Hypothesis[] = [];
-  const seen = new Set<string>();
-  const succeeded = state.charges.filter((c) => c.status === "succeeded");
-  for (const a of succeeded) {
-    for (const b of succeeded) {
-      if (a.id >= b.id) continue;
-      const pairKey = `${a.id}:${b.id}`;
-      if (seen.has(pairKey)) continue;
-      const closeInTime =
-        Math.abs(a.createdAt.getTime() - b.createdAt.getTime()) <= HOUR;
-      if (a.amount === b.amount && closeInTime) {
-        seen.add(pairKey);
-        const later: Charge = a.createdAt > b.createdAt ? a : b;
+  // Chronological pairing: each charge is compared with the nearest EARLIER
+  // same-amount charge within the window, so N same-amount charges yield
+  // N−1 hypotheses with unique ids (one per extra charge), never a
+  // colliding pair explosion.
+  const succeeded = state.charges
+    .filter((c) => c.status === "succeeded")
+    .slice()
+    .sort((x, y) => x.createdAt.getTime() - y.createdAt.getTime());
+  for (let i = 1; i < succeeded.length; i++) {
+    const later: Charge = succeeded[i];
+    const earlier = succeeded
+      .slice(0, i)
+      .reverse()
+      .find(
+        (c) =>
+          c.amount === later.amount &&
+          later.createdAt.getTime() - c.createdAt.getTime() <= HOUR
+      );
+    if (earlier) {
+      const a = earlier;
+      const b = later;
+      {
         const minutesApart = Math.round(
-          Math.abs(a.createdAt.getTime() - b.createdAt.getTime()) / 60_000
+          (b.createdAt.getTime() - a.createdAt.getTime()) / 60_000
         );
         out.push({
           id: `duplicate_charge:${later.id}`,

@@ -21,7 +21,10 @@ async function polishCards(candidates: Candidate[], demoMode: boolean): Promise<
   // rule violation) keeps the deterministic template copy.
   const polished = await Promise.all(
     candidates.map((c) =>
-      generateCardCopy({ kind: c.kind, title: c.title, detail: c.detail, evidence: c.evidence })
+      generateCardCopy(
+        { kind: c.kind, title: c.title, detail: c.detail, evidence: c.evidence },
+        1200
+      )
     )
   );
   return candidates.map((c, i) =>
@@ -47,7 +50,7 @@ export async function POST(request: Request) {
     const hypotheses = hypothesesFor(state);
     const [{ candidates, matchedBy }, legacy] = await Promise.all([
       rank(hypotheses, fragment, demoMode),
-      legacyResponse(fragment, demoMode, 2500),
+      legacyResponse(fragment, demoMode, 1500),
     ]);
     const response: ResolveResponse = {
       candidates: await polishCards(candidates, demoMode),

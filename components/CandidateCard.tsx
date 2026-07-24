@@ -19,7 +19,10 @@ export default function CandidateCard({
   disabled: boolean;
 }) {
   return (
-    <div className={`card-reveal ${shown ? "is-shown" : ""}`}>
+    // aria-hidden while visually hidden: the staged reveal must sound the
+    // same as it looks. The button is disabled until shown, so no focusable
+    // element ever hides inside an aria-hidden subtree.
+    <div className={`card-reveal ${shown ? "is-shown" : ""}`} aria-hidden={!shown}>
       <button
         type="button"
         disabled={disabled || !shown}
@@ -35,7 +38,7 @@ export default function CandidateCard({
       </button>
       <details className="mt-1 px-2">
         <summary className="flex min-h-[44px] w-fit cursor-pointer list-none items-center gap-1 rounded px-2 text-[16px] text-ink-soft [&::-webkit-details-marker]:hidden">
-          <span aria-hidden="true" className="text-[12px]">
+          <span aria-hidden="true" className="disclosure-glyph text-[16px]">
             ▸
           </span>
           why this?

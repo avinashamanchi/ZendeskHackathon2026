@@ -62,6 +62,16 @@ body {
   }
 }
 
+/* "why this?" disclosure: the glyph rotates open — shape, not colour,
+   carries the state. */
+.disclosure-glyph {
+  display: inline-block;
+  transition: transform 120ms ease-out;
+}
+details[open] .disclosure-glyph {
+  transform: rotate(90deg);
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

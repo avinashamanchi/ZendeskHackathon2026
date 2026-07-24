@@ -95,8 +95,26 @@ export default function Home() {
       setSubmitted(fragment);
       setTurns((t) => t + 1);
 
+      // The reveal is anchored to the SUBMIT, not the response. The status
+      // line ("Reading your account…") is true while we read; cards hydrate
+      // into their slots whenever the data lands. Worst case — a hung live
+      // fetch aborted at 2.8s plus the local fallback — still puts cards on
+      // screen inside the 3-second budget.
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (!reduced) {
+        const schedule: [number, () => void][] = [
+          [0, () => setStep(1)],
+          [400, () => setStep(2)],
+          [900, () => setStep(3)],
+          [1200, () => setStep(4)],
+          [1500, () => setStep(5)],
+          [1700, () => setStep(6)],
+          [2200, () => setPhase("settled")],
+        ];
+        timers.current = schedule.map(([ms, fn]) => setTimeout(fn, ms));
+      }
+
       // Same-origin API first; the local fixture resolver is the parachute.
-      // Either way, cards exist well inside the 3-second budget.
       let res: ResolveResponse;
       try {
         res = await fetchJson<ResolveResponse>(
@@ -110,23 +128,10 @@ export default function Home() {
       }
       if (gen !== generation.current) return; // reset/cycle happened mid-flight
       setResult(res);
-
-      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       if (reduced) {
         setStep(6);
         setPhase("settled");
-        return;
       }
-      const schedule: [number, () => void][] = [
-        [0, () => setStep(1)],
-        [400, () => setStep(2)],
-        [900, () => setStep(3)],
-        [1200, () => setStep(4)],
-        [1500, () => setStep(5)],
-        [1700, () => setStep(6)],
-        [2200, () => setPhase("settled")],
-      ];
-      timers.current = schedule.map(([ms, fn]) => setTimeout(fn, ms));
     },
     [clearTimers, demoMode, email]
   );
@@ -134,7 +139,11 @@ export default function Home() {
   const selectCandidate = useCallback(
     async (candidate: Candidate) => {
       if (phase === "receipt") return;
+      // Freeze the reveal: without this, the pending 2200ms "settled" timer
+      // would fire after the tap and yank the receipt back to the card stack.
+      clearTimers();
       const gen = generation.current;
+      setStep(6);
       setPhase("receipt");
       let r: ActReceipt;
       try {
@@ -150,7 +159,7 @@ export default function Home() {
       if (gen !== generation.current) return; // reset/cycle happened mid-flight
       setReceipt(r);
     },
-    [phase, email, demoMode]
+    [phase, email, demoMode, clearTimers]
   );
 
   // Hidden controls.
@@ -192,7 +201,7 @@ export default function Home() {
   const showReceipt = phase === "receipt" && receipt !== null;
 
   return (
-    <main className="mx-auto flex h-screen max-w-6xl flex-col gap-6 overflow-hidden p-6">
+    <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 p-6 md:h-screen md:overflow-hidden">
       <AxeAudit />
       <header className="flex items-baseline justify-between">
         <div className="flex items-baseline gap-4">
@@ -218,26 +227,30 @@ export default function Home() {
           typing={step >= 1 && phase !== "idle"}
           showCaption={step >= 3}
         />
-        {showReceipt ? (
-          <section aria-labelledby="point-heading" className="flex min-h-0 flex-col gap-4">
-            <h2
-              id="point-heading"
-              className="text-[16px] font-bold uppercase tracking-[0.08em] text-signal"
-            >
-              What actually happened
-            </h2>
-            <Receipt receipt={receipt} onReset={reset} />
-          </section>
-        ) : (
-          <PointPanel
-            candidates={candidates}
-            email={result?.customer.email ?? email}
-            visibleCards={visibleCards}
-            showStatus={step >= 2}
-            onSelect={(c) => void selectCandidate(c)}
-            acting={phase === "receipt"}
-          />
-        )}
+        <section aria-labelledby="point-heading" className="flex min-h-0 flex-col gap-4">
+          <h2
+            id="point-heading"
+            className="text-[16px] font-bold uppercase tracking-[0.08em] text-signal"
+          >
+            What actually happened
+          </h2>
+          {/* One always-mounted live region for the whole right column, so
+              screen readers reliably announce cards AND the receipt. */}
+          <div aria-live="polite" className="flex min-h-0 flex-1 flex-col gap-4">
+            {showReceipt ? (
+              <Receipt receipt={receipt} onReset={reset} />
+            ) : (
+              <PointPanel
+                candidates={candidates}
+                email={result?.customer.email ?? email}
+                visibleCards={visibleCards}
+                showStatus={step >= 2}
+                onSelect={(c) => void selectCandidate(c)}
+                acting={phase === "receipt"}
+              />
+            )}
+          </div>
+        </section>
       </div>
 
       {!demoMode ? (

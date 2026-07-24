@@ -6,7 +6,8 @@ import { money } from "./format";
 // as the fallback for every live write.
 
 export function ticketNumber(spec: ActionSpec): number {
-  const digits = spec.orderId?.replace(/\D/g, "");
+  const digits =
+    typeof spec.orderId === "string" ? spec.orderId.replace(/\D/g, "") : "";
   if (digits && digits.length > 0) return parseInt(digits, 10);
   const seed = spec.chargeId ?? spec.refundId ?? spec.subscriptionId ?? spec.kind;
   let h = 0;

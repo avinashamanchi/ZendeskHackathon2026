@@ -1,11 +1,17 @@
 import { NextResponse } from "next/server";
 import type { ActionSpec } from "@/lib/types";
-import { executeAction } from "@/lib/composio";
+import { executeAction, getAccountState } from "@/lib/composio";
+import { hypothesesFor } from "@/lib/engine";
 import { demoReceipt } from "@/lib/receipts";
 
 // POST { action, email, demo } → receipt.
 // The ONLY write in the system, and it fires only because a person tapped a
 // card. Nothing ever executes on a hypothesis alone. Can not 500.
+//
+// Live mode goes further: the client's action is only a REFERENCE. The server
+// re-derives the hypotheses from account state and executes its own matching
+// ActionSpec — a crafted body can never move money or write ticket content
+// the account state doesn't justify.
 
 export const runtime = "nodejs";
 
@@ -19,21 +25,35 @@ const ACTION_KINDS = new Set([
   "expedite_refund",
 ]);
 
+function sanitizeAction(raw: unknown): ActionSpec | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.kind !== "string" || !ACTION_KINDS.has(r.kind)) return null;
+  if (typeof r.summary !== "string") return null;
+  const str = (v: unknown) => (typeof v === "string" ? v.slice(0, 100) : undefined);
+  const cents = (v: unknown) =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 10_000_000
+      ? Math.floor(v)
+      : undefined;
+  return {
+    kind: r.kind as ActionSpec["kind"],
+    summary: r.summary.slice(0, 300),
+    amount: cents(r.amount),
+    orderId: str(r.orderId),
+    chargeId: str(r.chargeId),
+    subscriptionId: str(r.subscriptionId),
+    refundId: str(r.refundId),
+  };
+}
+
 export async function POST(request: Request) {
   let action: ActionSpec | null = null;
   let email = "maria@example.com";
   let demoMode = ENV_DEMO_DEFAULT;
   try {
     const body = await request.json();
-    if (
-      body.action &&
-      typeof body.action.kind === "string" &&
-      ACTION_KINDS.has(body.action.kind) &&
-      typeof body.action.summary === "string"
-    ) {
-      action = body.action as ActionSpec;
-    }
-    if (typeof body.email === "string") email = body.email;
+    action = sanitizeAction(body.action);
+    if (typeof body.email === "string") email = body.email.slice(0, 200);
     if (typeof body.demo === "boolean") demoMode = body.demo;
   } catch {
     // malformed body handled below
@@ -51,7 +71,29 @@ export async function POST(request: Request) {
   }
 
   try {
-    const receipt = await executeAction(action, email, demoMode);
+    let toExecute = action;
+    if (!demoMode) {
+      // Allowlist: find the server-derived action this request points at and
+      // execute THAT (server-authored summary included), or don't write at all.
+      const { state } = await getAccountState(email, false);
+      const match = hypothesesFor(state)
+        .map((h) => h.action)
+        .find(
+          (a) =>
+            a.kind === action!.kind &&
+            a.chargeId === action!.chargeId &&
+            a.orderId === action!.orderId &&
+            a.subscriptionId === action!.subscriptionId &&
+            a.refundId === action!.refundId &&
+            a.amount === action!.amount
+        );
+      if (!match) {
+        console.warn("[point] act request matched no derived hypothesis; no write");
+        return NextResponse.json(demoReceipt(action, "demo"));
+      }
+      toExecute = match;
+    }
+    const receipt = await executeAction(toExecute, email, demoMode);
     return NextResponse.json(receipt);
   } catch (err) {
     console.warn("[point] act fell back to demo receipt:", err);

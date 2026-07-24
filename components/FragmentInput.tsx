@@ -39,7 +39,7 @@ const FragmentInput = forwardRef<HTMLInputElement, Props>(function FragmentInput
       <button
         type="submit"
         disabled={busy}
-        className="min-h-[56px] shrink-0 rounded-lg bg-signal px-7 text-[22px] font-bold text-white transition-colors duration-[120ms] hover:bg-[#163f75] disabled:opacity-70"
+        className="min-h-[56px] shrink-0 rounded-lg bg-signal px-7 text-[22px] font-bold text-white transition-colors duration-[120ms] hover:bg-[#163f75] disabled:opacity-[0.85]"
       >
         I need help
       </button>

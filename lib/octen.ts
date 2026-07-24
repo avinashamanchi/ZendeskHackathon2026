@@ -37,13 +37,23 @@ export async function embedTexts(
     });
     if (!res.ok) throw new Error(`Octen HTTP ${res.status}`);
     const json = await res.json();
-    if (json.code !== 0 || !json.data?.results) {
+    if (json.code !== 0 || !Array.isArray(json.data?.results)) {
       throw new Error(`Octen error: ${json.msg ?? "malformed response"}`);
     }
-    return json.data.results
-      .slice()
-      .sort((a: { index: number }, b: { index: number }) => a.index - b.index)
-      .map((r: { embedding: number[] }) => r.embedding);
+    // Align strictly by the response's index field and demand completeness —
+    // a short or sparse batch throws (callers fall back cleanly and nothing
+    // gets cached), rather than silently mis-associating vectors.
+    const byIndex = new Map<number, number[]>();
+    for (const r of json.data.results as { index: number; embedding: number[] }[]) {
+      if (Array.isArray(r.embedding) && r.embedding.length > 0) {
+        byIndex.set(r.index, r.embedding);
+      }
+    }
+    return texts.map((_, i) => {
+      const v = byIndex.get(i);
+      if (!v) throw new Error(`Octen returned no embedding for input ${i} of ${texts.length}`);
+      return v;
+    });
   } finally {
     clearTimeout(timer);
   }
@@ -76,7 +86,11 @@ export async function embedHypothesisDocs(
   const misses = docs.filter((d) => !docCache.has(d.key));
   if (misses.length > 0) {
     const vectors = await embedTexts(misses.map((d) => d.text), "document");
-    misses.forEach((d, i) => docCache.set(d.key, vectors[i]));
+    // embedTexts guarantees completeness, but never cache a hole regardless —
+    // a poisoned cache entry would disable live embeddings until restart.
+    misses.forEach((d, i) => {
+      if (vectors[i]) docCache.set(d.key, vectors[i]);
+    });
   }
   const out = new Map<string, number[]>();
   for (const d of docs) {

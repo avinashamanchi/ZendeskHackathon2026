@@ -282,22 +282,28 @@ export function generateHypotheses(state: AccountState): Hypothesis[] {
 
   // duplicate_charge — ${stats("duplicate_charge")}
   // Gap threshold 60 min: max observed same-amount gap in cluster was 55 min.
+  // Chronological pairing: each charge pairs with the nearest earlier
+  // same-amount charge in the window — N same charges → N−1 unique hypotheses.
   {
-    const seen = new Set<string>();
-    const ok = state.charges.filter((c) => c.status === "succeeded");
-    for (const a of ok) {
-      for (const b of ok) {
-        if (a.id >= b.id) continue;
-        const key = a.id + ":" + b.id;
-        if (seen.has(key)) continue;
-        if (
-          a.amount === b.amount &&
-          Math.abs(a.createdAt.getTime() - b.createdAt.getTime()) <= HOUR
-        ) {
-          seen.add(key);
-          const later: Charge = a.createdAt > b.createdAt ? a : b;
+    const ok = state.charges
+      .filter((c) => c.status === "succeeded")
+      .slice()
+      .sort((x, y) => x.createdAt.getTime() - y.createdAt.getTime());
+    for (let i = 1; i < ok.length; i++) {
+      const later: Charge = ok[i];
+      const a = ok
+        .slice(0, i)
+        .reverse()
+        .find(
+          (c) =>
+            c.amount === later.amount &&
+            later.createdAt.getTime() - c.createdAt.getTime() <= HOUR
+        );
+      if (a) {
+        const b = later;
+        {
           const minutesApart = Math.round(
-            Math.abs(a.createdAt.getTime() - b.createdAt.getTime()) / 60_000
+            (b.createdAt.getTime() - a.createdAt.getTime()) / 60_000
           );
           out.push({
             id: "duplicate_charge:" + later.id,

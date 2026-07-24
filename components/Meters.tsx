@@ -14,7 +14,13 @@ function useCountUp(target: number, animate: boolean): number {
     const reduced =
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!animate || reduced || target === 0) {
+    if (!animate) {
+      // Hold at zero until the timeline's meter step — the counters are the
+      // punchline ("4 words, 1 turn") and land last, at 1700ms.
+      setValue(0);
+      return;
+    }
+    if (reduced || target === 0) {
       setValue(target);
       return;
     }

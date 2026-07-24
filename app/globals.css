@@ -16,6 +16,14 @@
   --signal: #1b4d8f;
   --signal-bg: #eaf1fa;
   --stale: #6b7280;
+  /* engine zone — "under the hood" reads instantly from the dark ground */
+  /* engine-dim lightened from the spec's #6E7681 (4.11:1 on the dark
+     ground) to hold the 4.5:1 text bar the spec itself sets in §15 */
+  --engine-bg: #0e1116;
+  --engine-ink: #c9d1d9;
+  --engine-dim: #8b949e;
+  --engine-hit: #58c4a0;
+  --engine-null: #f0705f;
 }
 
 body {
@@ -34,13 +42,13 @@ body {
   opacity: 1;
 }
 
-/* Staged reveal: cards fade and rise 12px over 200ms. */
+/* Staged reveal: cards fade and rise 12px over 240ms (§12.10). */
 .card-reveal {
   opacity: 0;
   transform: translateY(12px);
   transition:
-    opacity 200ms ease-out,
-    transform 200ms ease-out;
+    opacity 240ms ease-out,
+    transform 240ms ease-out;
 }
 .card-reveal.is-shown {
   opacity: 1;
@@ -59,6 +67,65 @@ body {
   .card-reveal {
     opacity: 1;
     transform: none;
+  }
+}
+
+/* Engine-zone animation: chip pulse while running, block cursor blink. */
+@keyframes chip-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(88, 196, 160, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(88, 196, 160, 0);
+  }
+}
+.chip-running {
+  animation: chip-pulse 1.2s ease-in-out infinite;
+}
+@keyframes cursor-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.reason-cursor {
+  animation: cursor-blink 1060ms steps(1) infinite;
+}
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.row-in {
+  animation: row-in 220ms ease-out both;
+}
+@keyframes head-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.head-fade {
+  animation: head-fade 200ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chip-running,
+  .reason-cursor,
+  .row-in,
+  .head-fade {
+    animation: none !important;
   }
 }
 

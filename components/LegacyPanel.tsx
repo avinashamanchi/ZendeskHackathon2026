@@ -37,7 +37,7 @@ export default function LegacyPanel({
         }
         return c + 1;
       });
-    }, 15);
+    }, 22); // §12.10: ~22ms/char
     return () => clearInterval(timer.current);
   }, [text, typing]);
 

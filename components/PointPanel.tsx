@@ -34,7 +34,7 @@ export default function PointPanel({
         </div>
       ) : (
         <p className="text-[16px] text-ink-soft">
-          Point reads the account, not the sentence.
+          Wordless reads the account, not the sentence.
         </p>
       )}
       <ul role="list" className="flex min-h-0 flex-col gap-4 overflow-y-auto">

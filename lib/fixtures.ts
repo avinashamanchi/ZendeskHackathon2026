@@ -8,13 +8,15 @@ import type { AccountState } from "./types";
 
 function makeFixtures(): Record<string, AccountState> {
   const now = Date.now();
-  const d = (days: number, hours = 0, minutes = 0) =>
-    new Date(now - days * 86_400_000 - hours * 3_600_000 - minutes * 60_000);
+  const d = (days: number, hours = 0, minutes = 0, seconds = 0) =>
+    new Date(
+      now - days * 86_400_000 - hours * 3_600_000 - minutes * 60_000 - seconds * 1_000
+    );
 
   /**
    * maria@example.com — DEMO-CRITICAL, the golden path.
    * Must generate exactly three hypotheses:
-   *   duplicate_charge  — ch_9001/ch_9002, both $84.00, 12 minutes apart
+   *   duplicate_charge  — ch_9001/ch_9002, both $84.00, 40 seconds apart
    *   wrong_item        — kettle delivered 2 days ago (inside 14-day window)
    *   late_delivery     — kettle promised 3 days ago, delivered 2 days ago (late)
    */
@@ -42,8 +44,8 @@ function makeFixtures(): Record<string, AccountState> {
       },
     ],
     charges: [
-      { id: "ch_9001", amount: 8400, createdAt: d(6, 0, 12), status: "succeeded", orderId: "A-4471" },
-      { id: "ch_9002", amount: 8400, createdAt: d(6, 0, 0), status: "succeeded", orderId: "A-4471" },
+      { id: "ch_9001", amount: 8400, createdAt: d(6, 0, 0, 40), status: "succeeded", orderId: "A-4471" },
+      { id: "ch_9002", amount: 8400, createdAt: d(6, 0, 0, 0), status: "succeeded", orderId: "A-4471" },
       { id: "ch_8800", amount: 3200, createdAt: d(31), status: "succeeded", orderId: "A-4390" },
     ],
     subscriptions: [],

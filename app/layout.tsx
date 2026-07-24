@@ -15,9 +15,9 @@ const atkinson = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Point — support that reads the account, not the sentence",
+  title: "Wordless — support that reads the account, not the sentence",
   description:
-    "For people with expressive aphasia: Point reads the merchant's own records and offers what's likely wrong as large, tappable cards. Point instead of explaining.",
+    "For people with expressive aphasia: Wordless reads the merchant's own records and offers what's likely wrong as large, tappable cards. Point instead of explaining.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

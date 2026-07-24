@@ -7,7 +7,7 @@ import type { ActReceipt } from "@/lib/types";
 // Announcement comes from the page's persistent aria-live region; focus
 // lands on "Start again" so a keyboard-only run never strands.
 
-export default function Receipt({
+export default function ReceiptPanel({
   receipt,
   onReset,
 }: {

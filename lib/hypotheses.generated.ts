@@ -23,7 +23,7 @@
 //   unexpected_renewal: 39 of 350 tickets; state present in 65; P(reason | state) = 0.6 · e.g. "it took money again", "subsription charged again", "subscription charged again"
 
 import type { AccountState, Charge, Hypothesis, Order } from "./types";
-import { money, shortDate, daysAgo } from "./format";
+import { money, shortDate, daysAgo, gapText } from "./format";
 
 export const GENERATED = true;
 
@@ -69,9 +69,7 @@ export function generateHypotheses(state: AccountState): Hypothesis[] {
       if (a) {
         const b = later;
         {
-          const minutesApart = Math.round(
-            (b.createdAt.getTime() - a.createdAt.getTime()) / 60_000
-          );
+          const gap = gapText(b.createdAt.getTime() - a.createdAt.getTime());
           out.push({
             id: "duplicate_charge:" + later.id,
             kind: "duplicate_charge",
@@ -79,7 +77,7 @@ export function generateHypotheses(state: AccountState): Hypothesis[] {
             detail: `Two charges of ${money(a.amount)} on ${shortDate(a.createdAt)} for order ${a.orderId ?? "—"}.`,
             evidence: [
               `Charge ${a.id} — ${money(a.amount)} — ${shortDate(a.createdAt)}`,
-              `Charge ${b.id} — ${money(b.amount)} — ${minutesApart} minutes later`,
+              `Charge ${b.id} — ${money(b.amount)} — ${gap} later`,
               a.orderId ? `Both point at order ${a.orderId}` : "No order attached to either charge",
             ],
             occurredAt: later.createdAt,
@@ -90,7 +88,7 @@ export function generateHypotheses(state: AccountState): Hypothesis[] {
               amount: later.amount,
               chargeId: later.id,
               orderId: a.orderId,
-              summary: `Duplicate charge: ${a.id} and ${b.id}, both ${money(a.amount)}, ${minutesApart} minutes apart. Refunding ${later.id}.`,
+              summary: `Duplicate charge: ${a.id} and ${b.id}, both ${money(a.amount)}, ${gap} apart. Refunding ${later.id}.`,
             },
           });
         }

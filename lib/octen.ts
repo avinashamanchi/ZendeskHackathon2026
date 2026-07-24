@@ -114,8 +114,9 @@ export const PRECOMPUTED: Record<string, Record<string, number>> = {
     refund_pending: 0.1,
     unexpected_renewal: 0.05,
   },
+  // 0.81 on the kettle is the number the stage script cites — locked.
   "the boily thing broke": {
-    wrong_item: 0.95,
+    wrong_item: 0.81,
     late_delivery: 0.2,
     duplicate_charge: 0.15,
     refund_pending: 0.05,

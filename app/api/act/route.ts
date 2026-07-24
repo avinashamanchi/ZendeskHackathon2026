@@ -23,6 +23,7 @@ const ACTION_KINDS = new Set([
   "trace_shipment",
   "refund_renewal",
   "expedite_refund",
+  "file_ticket",
 ]);
 
 function sanitizeAction(raw: unknown): ActionSpec | null {
@@ -72,7 +73,9 @@ export async function POST(request: Request) {
 
   try {
     let toExecute = action;
-    if (!demoMode) {
+    // file_ticket only opens a ticket carrying the customer's own words —
+    // it is the zero-hypothesis handoff and is always permitted.
+    if (!demoMode && action.kind !== "file_ticket") {
       // Allowlist: find the server-derived action this request points at and
       // execute THAT (server-authored summary included), or don't write at all.
       const { state } = await getAccountState(email, false);

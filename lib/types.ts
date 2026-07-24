@@ -71,7 +71,8 @@ export type ActionKind =
   | "open_replacement"
   | "trace_shipment"
   | "refund_renewal"
-  | "expedite_refund";
+  | "expedite_refund"
+  | "file_ticket";
 
 export interface ActionSpec {
   kind: ActionKind;
@@ -136,3 +137,40 @@ export interface ActReceipt {
   ticketId?: string;
   mode: "live" | "demo";
 }
+
+// ---------------------------------------------------------------------------
+// Pipeline events — the engine surface's food supply. /api/resolve streams
+// these over SSE; the client scheduler dispatches them by `at` (auto mode)
+// or by `gate` (presenter mode). Everything the judges watch is one of these.
+// ---------------------------------------------------------------------------
+
+export type ToolName = "composio" | "octen" | "codex" | "zendesk";
+
+/** Presenter-mode step; spacebar releases one gate at a time. */
+export type Gate = "input" | "composio" | "octen" | "scoring" | "cards";
+
+export type PipelineEvent =
+  | { t: "stage_start"; tool: ToolName; label: string }
+  | { t: "stage_done"; tool: ToolName; ms: number; sim: boolean; summary: string }
+  | { t: "stage_skipped"; tool: ToolName; label: string }
+  | { t: "reason_head"; text: string }
+  | { t: "reason_line"; text: string }
+  | { t: "evidence"; source: string; line: string; raw: object; hit: boolean }
+  | {
+      t: "hypothesis";
+      kind: string;
+      base: number;
+      recency: number;
+      semantic: number;
+      total: number;
+      fired: boolean;
+      rank?: number;
+      why: string;
+    }
+  | { t: "semantic"; token: string; target: string; keyword: number; octen: number }
+  | { t: "legacy"; text: string }
+  | { t: "candidates"; cards: Candidate[]; panel: "scores" | "compare"; customer: { email: string; name: string } }
+  | { t: "error"; tool: ToolName; recovered: true };
+
+/** A pipeline event with its auto-mode offset (ms from submit) and gate. */
+export type TimedEvent = PipelineEvent & { at: number; gate: Gate };

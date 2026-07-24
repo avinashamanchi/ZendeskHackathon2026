@@ -59,5 +59,26 @@ export function demoReceipt(spec: ActionSpec, mode: "live" | "demo"): ActReceipt
         ticketId,
         mode,
       };
+    case "file_ticket":
+      return {
+        headline: "Done. A person has your message.",
+        detail: `Zendesk ticket #${ticketId} open · your words are attached`,
+        ticketId,
+        mode,
+      };
   }
+}
+
+/**
+ * The honest receipt for a live write that did NOT complete. Never claim a
+ * refund succeeded when it didn't — the work goes to a human instead.
+ */
+export function handoffReceipt(spec: ActionSpec): ActReceipt {
+  const ticketId = String(ticketNumber(spec));
+  return {
+    headline: "Sent to a person to finish.",
+    detail: `Zendesk ticket #${ticketId} open · a human will confirm`,
+    ticketId,
+    mode: "demo",
+  };
 }

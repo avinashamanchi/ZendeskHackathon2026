@@ -1,7 +1,7 @@
 import { Composio } from "@composio/core";
 import type { AccountState, ActionSpec, ActReceipt } from "./types";
 import { fixtureFor } from "./fixtures";
-import { demoReceipt } from "./receipts";
+import { demoReceipt, handoffReceipt } from "./receipts";
 
 // Composio — the tool that replaces the sentence the person can't write.
 // It reads the MERCHANT'S OWN RECORDS about their own customer: charges,
@@ -182,7 +182,9 @@ export async function executeAction(
           : base.detail,
     };
   } catch (err) {
-    console.warn("[point] composio write failed, demo receipt:", err);
-    return demoReceipt(spec, "demo");
+    // A live write that failed must never claim success. The receipt says a
+    // person will finish it — and that is what the fallback ticket asks for.
+    console.warn("[point] composio write failed, handing off:", err);
+    return handoffReceipt(spec);
   }
 }

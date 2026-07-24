@@ -1,25 +1,30 @@
-import type { ResolveResponse } from "./types";
+import type { TimedEvent } from "./types";
 import { fixtureFor } from "./fixtures";
 import { hypothesesFor } from "./engine";
 import { rank } from "./rank";
 import { legacyFallback } from "./legacy-fallback";
+import { buildPipelineEvents } from "./pipeline";
 
 /**
- * The client's last parachute: a full resolve computed in the browser from
- * fixtures, used only if the same-origin API route somehow fails or times
- * out. The person never sees an error, an unresolving spinner, or an empty
- * screen — not even if the dev server dies mid-demo.
+ * The client's last parachute: the full pipeline computed in the browser from
+ * fixtures, used only if the same-origin SSE route somehow fails. The person
+ * never sees an error, an unresolving spinner, or an empty screen — not even
+ * if the dev server dies mid-demo.
  */
-export async function localResolve(
+export async function localPipelineEvents(
   fragment: string,
   email: string
-): Promise<ResolveResponse> {
+): Promise<TimedEvent[]> {
   const state = fixtureFor(email);
-  const { candidates, matchedBy } = await rank(hypothesesFor(state), fragment, true);
-  return {
+  const hypotheses = hypothesesFor(state);
+  const { candidates, matchedBy } = await rank(hypotheses, fragment, true);
+  return buildPipelineEvents({
+    state,
+    fragment,
     candidates,
+    hypotheses,
     legacy: legacyFallback(fragment),
     matchedBy,
-    customer: { email: state.email, name: state.name },
-  };
+    sim: true,
+  });
 }

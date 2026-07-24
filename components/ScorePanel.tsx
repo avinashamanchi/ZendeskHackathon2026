@@ -1,123 +1,196 @@
-"use client";
+import type { CSSProperties } from "react";
 
-import { useEffect, useState } from "react";
-
-// Every hypothesis considered, including the ones that didn't fire — showing
-// rejected candidates is what makes this read as reasoning, not a lookup
-// (§12.7). Path B swaps in the keyword-vs-Octen comparison: 0.00 down the
-// keyword column, the kettle lighting up under octen — the clearest single
-// proof Octen is doing real work.
-
-export interface ScoreRowData {
+export interface HypothesisScore {
+  id: string;
   kind: string;
-  base: number;
-  recency: number;
-  semantic: number;
-  total: number;
+  base?: number;
+  recency?: number;
+  semantic?: number;
+  total?: number;
   fired: boolean;
   rank?: number;
-  why: string;
+  why?: string;
 }
 
-export interface SemanticRowData {
-  token: string;
-  target: string;
+export interface SemanticComparison {
+  id: string;
+  label: string;
+  target?: string;
   keyword: number;
-  octen: number; // −1 = not measured
+  octen: number;
+  strongest?: boolean;
 }
 
-const RANK_MARK = ["", "①", "②", "③"];
-
-function AnimatedNumber({ value, decimals = 2 }: { value: number; decimals?: number }) {
-  const [shown, setShown] = useState(0);
-  useEffect(() => {
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced) {
-      setShown(value);
-      return;
-    }
-    const start = performance.now();
-    let raf = 0;
-    const tick = (now: number) => {
-      const t = Math.min(1, (now - start) / 400);
-      setShown(value * t);
-      if (t < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [value]);
-  return <>{shown.toFixed(decimals)}</>;
+export interface ScorePanelProps {
+  hypotheses?: readonly HypothesisScore[];
+  comparisons?: readonly SemanticComparison[];
+  mode?: "hypotheses" | "semantic";
+  title?: string;
+  emptyText?: string;
+  className?: string;
 }
 
-const f2 = (n: number) => n.toFixed(2).replace(/^0\./, ".");
+function bounded(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
 
-export default function ScorePanel({
-  mode,
-  scores,
-  semantics,
-}: {
-  mode: "scores" | "compare";
-  scores: ScoreRowData[];
-  semantics: SemanticRowData[];
-}) {
+function score(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return "—";
+  return value.toFixed(2).replace(/^0/, "");
+}
+
+export function ScorePanel({
+  hypotheses = [],
+  comparisons = [],
+  mode = comparisons.length > 0 ? "semantic" : "hypotheses",
+  title = "Scores",
+  emptyText = "Scores will appear here.",
+  className = "",
+}: ScorePanelProps) {
+  const classes = ["score-panel", "score-panel-" + mode, className]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col border-t border-[rgba(110,118,129,0.35)] pt-2">
-      <p className="mb-1 text-[12px] uppercase tracking-[0.14em] text-[color:var(--engine-dim)]">
-        {mode === "compare" ? "keyword vs octen" : "Scores"}
-      </p>
-      <div className="min-h-0 flex-1 overflow-y-auto font-mono text-[13px] leading-[1.8] tabular-nums">
-        {mode === "compare" ? (
-          <>
-            <div className="flex gap-2 text-[color:var(--engine-dim)]">
-              <span className="flex-1">match target</span>
-              <span className="w-[70px] text-right">keyword</span>
-              <span className="w-[70px] text-right">octen</span>
-            </div>
-            {semantics.map((s, i) => (
-              <div key={i} className="row-in flex gap-2">
-                <span className="flex-1 truncate text-[color:var(--engine-ink)]">{s.target}</span>
-                <span className="w-[70px] text-right text-[color:var(--engine-null)]">
-                  {s.keyword.toFixed(2)}
-                </span>
-                <span
-                  className={`w-[70px] text-right ${
-                    s.octen >= 0.5
-                      ? "font-bold text-[color:var(--engine-hit)]"
-                      : "text-[color:var(--engine-ink)]"
-                  }`}
-                >
-                  {s.octen < 0 ? "—" : <AnimatedNumber value={s.octen} />}
-                </span>
-              </div>
-            ))}
-          </>
-        ) : (
-          scores.map((row) => (
-            <div key={row.kind} className="row-in flex items-baseline gap-2">
-              <span
-                className={`w-[172px] shrink-0 truncate ${
-                  row.fired ? "text-[color:var(--engine-hit)]" : "text-[color:var(--engine-dim)]"
-                }`}
-              >
-                {row.kind}
-              </span>
-              {row.fired ? (
-                <span className="flex-1 text-right text-[color:var(--engine-ink)]">
-                  {f2(row.base)} + {f2(row.recency)} + {f2(row.semantic)} ={" "}
-                  <span className="font-bold text-[color:var(--engine-hit)]">
-                    <AnimatedNumber value={row.total} />
-                  </span>{" "}
-                  FIRED {RANK_MARK[row.rank ?? 0]}
-                </span>
-              ) : (
-                <span className="flex-1 text-right text-[color:var(--engine-dim)]">
-                  — {row.why}
-                </span>
-              )}
-            </div>
-          ))
-        )}
+    <section className={classes} aria-label={title}>
+      <div className="engine-panel-heading">
+        <h3>{title}</h3>
+        <span className="score-mode">
+          {mode === "semantic" ? "keyword vs Octen" : "all candidates"}
+        </span>
       </div>
-    </div>
+
+      {mode === "semantic" ? (
+        comparisons.length > 0 ? (
+          <table className="semantic-score-table">
+            <caption className="visually-hidden">
+              Keyword and Octen semantic similarity comparison
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">match</th>
+                <th scope="col">keyword</th>
+                <th scope="col">Octen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {comparisons.map((comparison) => (
+                <tr
+                  className={
+                    comparison.strongest
+                      ? "semantic-row semantic-row-strongest"
+                      : "semantic-row"
+                  }
+                  key={comparison.id}
+                >
+                  <th scope="row">
+                    <span>{comparison.label}</span>
+                    {comparison.target ? (
+                      <small>{comparison.target}</small>
+                    ) : null}
+                  </th>
+                  <td
+                    className={
+                      comparison.keyword === 0
+                        ? "semantic-keyword semantic-zero"
+                        : "semantic-keyword"
+                    }
+                  >
+                    <data value={comparison.keyword}>
+                      {score(comparison.keyword)}
+                    </data>
+                  </td>
+                  <td className="semantic-octen">
+                    <div
+                      className="semantic-score-bar"
+                      style={
+                        {
+                          "--semantic-score": bounded(comparison.octen),
+                        } as CSSProperties
+                      }
+                    >
+                      <span aria-hidden="true" />
+                      <data value={comparison.octen}>
+                        {score(comparison.octen)}
+                      </data>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="engine-panel-empty">{emptyText}</p>
+        )
+      ) : hypotheses.length > 0 ? (
+        <ol className="hypothesis-score-list">
+          {hypotheses.map((hypothesis) => {
+            const totalRatio = bounded((hypothesis.total ?? 0) / 2);
+            const rowClasses = [
+              "hypothesis-score-row",
+              hypothesis.fired
+                ? "hypothesis-score-fired"
+                : "hypothesis-score-rejected",
+            ].join(" ");
+
+            return (
+              <li
+                className={rowClasses}
+                data-fired={hypothesis.fired ? "true" : "false"}
+                key={hypothesis.id}
+                style={
+                  {
+                    "--hypothesis-score": totalRatio,
+                  } as CSSProperties
+                }
+              >
+                <div className="hypothesis-score-main">
+                  <span className="hypothesis-kind">{hypothesis.kind}</span>
+                  {hypothesis.fired ? (
+                    <span className="hypothesis-equation">
+                      <data value={hypothesis.base}>
+                        {score(hypothesis.base)}
+                      </data>
+                      <span aria-hidden="true"> + </span>
+                      <data value={hypothesis.recency}>
+                        {score(hypothesis.recency)}
+                      </data>
+                      <span aria-hidden="true"> + </span>
+                      <data value={hypothesis.semantic}>
+                        {score(hypothesis.semantic)}
+                      </data>
+                      <span aria-hidden="true"> = </span>
+                      <strong>
+                        <data value={hypothesis.total}>
+                          {score(hypothesis.total)}
+                        </data>
+                      </strong>
+                    </span>
+                  ) : (
+                    <span className="hypothesis-reason">
+                      {hypothesis.why ?? "not fired"}
+                    </span>
+                  )}
+                  <span className="hypothesis-result">
+                    {hypothesis.fired ? "FIRED" : "not fired"}
+                    {hypothesis.rank ? (
+                      <span className="hypothesis-rank">
+                        {" #" + hypothesis.rank}
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
+                <span className="hypothesis-score-track" aria-hidden="true">
+                  <span />
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p className="engine-panel-empty">{emptyText}</p>
+      )}
+    </section>
   );
 }

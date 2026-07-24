@@ -1,298 +1,514 @@
-// Writes /data/ticket-corpus.json: 350 synthetic resolved support tickets in
-// the merchant's domain — subject, body, resolution, and the account state at
-// the time of contact. Realistic and messy: fragments, typos, circumlocution.
-//
-// Run ONCE, offline: npm run generate:corpus
-// Deterministic (seeded PRNG) so the corpus — and everything derived from it —
-// is reproducible.
-//
-// There is NO reason-for-contact label in the data. The rule generator has to
-// discover the clusters itself (it does so from resolution text), which is
-// what makes the derived engine an answer to "did you just hardcode this?"
-
-import { writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import path from "node:path";
 
-const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "data", "ticket-corpus.json");
+import type { AccountState } from "../lib/types";
 
-// mulberry32 — tiny seeded PRNG
-function rng(seed: number) {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+const FIXED_NOW = Date.parse("2026-04-15T12:00:00.000Z");
+const DAY_MS = 86_400_000;
+const SEED = 0x574f5244;
+const RECORDS_PER_KIND = 64;
+
+const resolutionKinds = [
+  "duplicate_charge",
+  "wrong_item",
+  "late_delivery",
+  "unexpected_renewal",
+  "refund_pending",
+  "clean_state",
+] as const;
+
+const styles = [
+  "fragment",
+  "misspelling",
+  "circumlocution",
+  "fluent",
+] as const;
+
+type ResolutionKind = (typeof resolutionKinds)[number];
+type TicketStyle = (typeof styles)[number];
+type ActionKind =
+  | "refund_duplicate"
+  | "replace_item"
+  | "trace_delivery"
+  | "review_renewal"
+  | "trace_refund"
+  | null;
+
+interface TicketRecord {
+  ticketId: string;
+  fictional: true;
+  style: TicketStyle;
+  channel: "chat" | "email" | "web";
+  receivedAt: string;
+  customerText: {
+    subject: string;
+    body: string;
+  };
+  accountStateAtContact: AccountState;
+  expectedResolution: {
+    kind: ResolutionKind;
+    detectorKind: Exclude<ResolutionKind, "clean_state"> | null;
+    actionKind: ActionKind;
+    summary: string;
   };
 }
-const rand = rng(20260723);
-const pick = <T,>(arr: T[]): T => arr[Math.floor(rand() * arr.length)];
-const between = (lo: number, hi: number) => lo + Math.floor(rand() * (hi - lo + 1));
 
-const DAY = 86_400_000;
-const NOW = Date.UTC(2026, 6, 23); // fixed epoch so the corpus is stable
+interface TextContext {
+  amount: string;
+  item: string;
+  order: string;
+  plan: string;
+  days: string;
+}
 
-const PRODUCTS = [
-  "Ceramic kettle, 1.7L", "Stoneware mug, set of 2", "Teapot, cast iron",
-  "Espresso cups, set of 4", "Pour-over dripper", "Electric gooseneck kettle",
-  "Matcha whisk set", "Cold brew carafe", "Travel tumbler, 12oz", "Tea sampler box",
-];
+type TextBank = Record<
+  ResolutionKind,
+  Record<TicketStyle, { subjects: string[]; bodies: string[] }>
+>;
 
-// Aphasic and non-aphasic voices alike appear in ticket history; the miner
-// later surfaces whatever phrasings actually recur.
-const VOICES = {
+const textBank: TextBank = {
   duplicate_charge: {
-    subjects: ["charged twice", "double charge??", "two charges same day", "billing wrong", "money taken 2 times", "why two charges"],
-    bodies: [
-      "you took money twice. same amount. fix please",
-      "I was charged again for the same order?? my bank shows two charges",
-      "money... twice... card... help",
-      "charged double for one order, want the extra back",
-      "looked at my statement and theres two charges for the same thing",
-      "paid two times. one order. bank shows double",
-    ],
-    resolutions: [
-      "Refunded duplicate charge; confirmed single fulfilment.",
-      "Duplicate charge refunded to card; apologised for billing error.",
-      "Verified double charge, refunded the second charge.",
-    ],
-  },
-  late_delivery: {
-    subjects: ["where is my order", "order late", "still waiting", "package not here", "not arrived yet", "delivery??"],
-    bodies: [
-      "order was promised last week. still nothing. where is it",
-      "still waiting... package... nothing came",
-      "its been days past the delivery date, tracking not moving",
-      "where box? said friday. no box.",
-      "my order hasn't come and the date passed already",
-      "not here. waiting. long time.",
-      "it finally came but days late, that's not ok",
-      "arrived at last... late... too late",
-    ],
-    resolutions: [
-      "Opened carrier trace; shipment located and delivered.",
-      "Traced shipment with carrier, provided updated ETA.",
-      "Carrier trace opened; expedited remainder of route.",
-    ],
+    fragment: {
+      subjects: ["same charge twice", "card. two times.", "money twice"],
+      bodies: [
+        "order {{order}}. {{amount}} then {{amount}} again. help.",
+        "bank shows two. same money. same order.",
+        "paid already. card took it twice.",
+        "two lines. {{amount}}. both today.",
+      ],
+    },
+    misspelling: {
+      subjects: ["chaged two tmes", "duble payment", "same chrge agin"],
+      bodies: [
+        "I got chaged {{amount}} two tmes for {{order}}.",
+        "My bak app has the same paymant twice, can u chek?",
+        "It tuk the mony again even tho I alredy paid.",
+        "There r 2 card chargs for one oder.",
+      ],
+    },
+    circumlocution: {
+      subjects: ["the money thing repeated", "two matching bank lines", "it took it again"],
+      bodies: [
+        "The place where my card money appears has the same {{amount}} line two times.",
+        "I only bought one thing, but the number under the purchase is there again right below it.",
+        "The money left once like it should, then the exact same amount left another time.",
+        "For {{order}}, the bank-side list looks copied: one purchase, two payments.",
+      ],
+    },
+    fluent: {
+      subjects: ["Duplicate charge for {{order}}", "Two identical card charges", "Billing correction requested"],
+      bodies: [
+        "My statement shows two successful charges of {{amount}} for order {{order}}, but I placed only one order.",
+        "I was billed twice for the same purchase. Please refund the duplicate charge.",
+        "There are two identical transactions for {{order}} within the same hour; only one is valid.",
+        "Could you review the duplicated {{amount}} payment and reverse the second transaction?",
+      ],
+    },
   },
   wrong_item: {
-    subjects: ["item broken", "wrong thing arrived", "damaged in box", "not what i ordered", "arrived broken", "problem with delivery"],
-    bodies: [
-      "the boily thing broke. crack in side. water everywhere",
-      "the water thing arrived cracked, leaks when I pour",
-      "box came but wrong item inside, ordered the kettle got mugs",
-      "arrived broken... the hot one... glass everywhere",
-      "thing for tea came damaged, chip on the spout",
-      "opened the box and its smashed. want a new one",
-    ],
-    resolutions: [
-      "Replacement sent; no return required for damaged item.",
-      "Sent replacement order; damaged unit written off.",
-      "Confirmed wrong/damaged item, replacement shipped.",
-    ],
+    fragment: {
+      subjects: ["wrong thing came", "item broke", "need another one"],
+      bodies: [
+        "{{item}}. arrived cracked. replace?",
+        "order {{order}} wrong one. need right one.",
+        "the thing that came. handle broken.",
+        "opened box. not usable. help new one.",
+      ],
+    },
+    misspelling: {
+      subjects: ["it arived brokn", "rong item", "replacment pls"],
+      bodies: [
+        "The {{item}} arived with a crack and I need a replacment.",
+        "Order {{order}} has the rong thing in the box.",
+        "It dosnt work out of the pakage. can u send anuther?",
+        "The handels brokn on the thing that came yesturday.",
+      ],
+    },
+    circumlocution: {
+      subjects: ["the thing from the last box", "the tea-water item", "what arrived is not right"],
+      bodies: [
+        "The {{item}}, the thing I use to make the water hot, came with a piece split off.",
+        "What was inside the newest delivery is not the version I chose on the picture.",
+        "I need another of the thing from {{order}} because this one cannot be used safely.",
+        "The object that arrived most recently has the wrong part where the handle should be.",
+      ],
+    },
+    fluent: {
+      subjects: ["Replacement for {{item}}", "Incorrect item in {{order}}", "Recent delivery arrived damaged"],
+      bodies: [
+        "The {{item}} in order {{order}} arrived damaged, so I would like a replacement.",
+        "I received a different model than the one listed on my recent order. Please send the correct item.",
+        "My newest delivery has a broken handle and cannot be used; could you arrange a replacement?",
+        "The package arrived, but its item is defective and I need the same product in working condition.",
+      ],
+    },
+  },
+  late_delivery: {
+    fragment: {
+      subjects: ["still not here", "order late", "where package"],
+      bodies: [
+        "{{order}} due {{days}} days ago. nothing.",
+        "tracking says moving. no box yet.",
+        "was meant to come. still waiting.",
+        "delivery date passed. need help.",
+      ],
+    },
+    misspelling: {
+      subjects: ["delivry late", "pakage not hear", "wheres my oder"],
+      bodies: [
+        "My pakage was due {{days}} days ago but its not hear.",
+        "Order {{order}} stil says in trasit after the delivry date.",
+        "I havnt got the box and the date alredy past.",
+        "Can u chek were my oder is? it shuld be here.",
+      ],
+    },
+    circumlocution: {
+      subjects: ["the box that never came", "past the day on the tracker", "waiting for the delivery thing"],
+      bodies: [
+        "The day the tracking page said I would have it has gone by, but there is no package.",
+        "The thing carrying {{order}} still says it is between places even though it should be at my door.",
+        "I keep looking outside for the box that was meant to arrive {{days}} days ago.",
+        "The progress line has not reached delivered and the promised day is already behind us.",
+      ],
+    },
+    fluent: {
+      subjects: ["Late delivery for {{order}}", "Order has missed its delivery date", "Please trace my shipment"],
+      bodies: [
+        "Order {{order}} was promised {{days}} days ago and remains in transit. Please trace the delivery.",
+        "My shipment has passed its expected delivery date, and I have not received an updated arrival estimate.",
+        "The tracking page still shows in transit even though the package should already have arrived.",
+        "Could you locate my overdue shipment and tell me when it is likely to arrive?",
+      ],
+    },
   },
   unexpected_renewal: {
-    subjects: ["subscription charged again", "didnt want renewal", "cancel and refund", "why charged monthly", "it took money again", "stop subscription"],
-    bodies: [
-      "it charged me again this month. didn't want it. stop it",
-      "the club thing keeps taking money every month, cancel please",
-      "again!! money again. no.",
-      "thought I cancelled but it renewed anyway, refund me",
-      "subscription took money again, I don't use it anymore",
-      "keeps taking. every month. didn't want.",
-    ],
-    resolutions: [
-      "Cancelled renewal and refunded; subscription paused.",
-      "Refunded renewal charge, paused subscription per request.",
-      "Renewal refunded; auto-renew disabled.",
-    ],
+    fragment: {
+      subjects: ["plan charged again", "monthly thing back", "did not want renewal"],
+      bodies: [
+        "{{plan}}. {{amount}} again. stop.",
+        "money came out for plan. did not ask.",
+        "renewed yesterday. don't need it.",
+        "same monthly payment back. help cancel.",
+      ],
+    },
+    misspelling: {
+      subjects: ["subscrption chrged", "unwantd renewl", "plan took mony agin"],
+      bodies: [
+        "The subscribtion renewd and took {{amount}} but I dont want it.",
+        "I thot I cancled {{plan}} and it chaged me agin.",
+        "Why did the monthy plan renew? plese chek it.",
+        "This renewl wasnt expexted and I need help stoping it.",
+      ],
+    },
+    circumlocution: {
+      subjects: ["the repeating plan came back", "money for another month", "the automatic thing happened"],
+      bodies: [
+        "The thing that pays itself each month took {{amount}} again, and I did not mean to keep it.",
+        "I thought the repeating home-items arrangement was finished, but another month appeared on my card.",
+        "The automatic part turned itself on for a new period when I expected it to stop.",
+        "There is a new payment for the plan that sends things regularly, which I no longer need.",
+      ],
+    },
+    fluent: {
+      subjects: ["Unexpected {{plan}} renewal", "Subscription renewed after cancellation", "Review recent plan charge"],
+      bodies: [
+        "My {{plan}} renewed for {{amount}}, but I did not intend to continue the subscription.",
+        "I expected this subscription to end before the next billing date, yet it renewed this week.",
+        "Please review the latest renewal and help me stop future recurring charges.",
+        "A new subscription payment appeared even though I believed the plan was no longer active.",
+      ],
+    },
   },
   refund_pending: {
-    subjects: ["refund not received", "wheres my money back", "refund still pending", "no refund yet", "money not back", "refund??"],
-    bodies: [
-      "you said refund days ago. bank shows nothing. where money",
-      "still waiting for my money back, its been over a week",
-      "money back... nothing... bank empty...",
-      "the refund never arrived on my card, please check",
-      "was told 5 days for the refund. its been more. nothing.",
-      "no money came back yet. checked every day.",
-    ],
-    resolutions: [
-      "Escalated refund with processor; settled next day.",
-      "Refund escalated with payment processor, confirmed settlement.",
-      "Processor escalation filed; refund pushed through.",
-    ],
+    fragment: {
+      subjects: ["money not back", "refund missing", "still waiting refund"],
+      bodies: [
+        "refund started {{days}} days. nothing in bank.",
+        "{{amount}} coming back? not there.",
+        "return done. money still gone.",
+        "refund says pending. too long.",
+      ],
+    },
+    misspelling: {
+      subjects: ["refnd not here", "wating for mony", "retun money mising"],
+      bodies: [
+        "My refnd was startd {{days}} days ago but the mony isnt back.",
+        "Im stil wating for {{amount}} from the retun.",
+        "The app says pendng and my bak has not got it.",
+        "Can u chek the refun? its takng a long time.",
+      ],
+    },
+    circumlocution: {
+      subjects: ["the money coming back is absent", "after I sent it back", "waiting for the reverse payment"],
+      bodies: [
+        "The money that was supposed to travel back to my card has not shown up after {{days}} days.",
+        "I returned the item, and the number that should be added back to my bank is still missing.",
+        "The payment is meant to go in the other direction now, but it seems stuck at pending.",
+        "I was told {{amount}} would come back, and I cannot find it anywhere on the card page.",
+      ],
+    },
+    fluent: {
+      subjects: ["Pending refund of {{amount}}", "Refund has not reached my account", "Please trace my refund"],
+      bodies: [
+        "My {{amount}} refund was initiated {{days}} days ago and still has not reached my account.",
+        "The refund remains pending well beyond the expected processing window. Could you trace it?",
+        "I completed the return, but the corresponding credit has not appeared on my card statement.",
+        "Please check the status of my refund and confirm whether the bank has received it.",
+      ],
+    },
   },
-  // Noise clusters — real ticket history is messy. These stay below the
-  // frequency threshold, so the generator must NOT emit detectors for them.
-  password_reset: {
-    subjects: ["cant log in", "password reset broken", "locked out"],
-    bodies: ["reset email never comes, checked spam", "cant get into my account at all", "login loop, keeps kicking me out"],
-    resolutions: ["Sent manual reset link; account recovered."],
+  clean_state: {
+    fragment: {
+      subjects: ["is it done", "money came back", "checking status"],
+      bodies: [
+        "refund shows settled. just checking.",
+        "box here. charge once. all okay?",
+        "money back now. nothing else.",
+        "order done. no more help needed.",
+      ],
+    },
+    misspelling: {
+      subjects: ["just cheking", "refnd arived", "oder all good"],
+      bodies: [
+        "The refnd is in my bak now, I am just cheking its closed.",
+        "My pakage arived and theres only one chrge.",
+        "Looks settld now. no acton needd.",
+        "I got the mony back so this can be closd.",
+      ],
+    },
+    circumlocution: {
+      subjects: ["the money returned", "the box is with me now", "the account looks quiet"],
+      bodies: [
+        "The number that left my card has come back, so I only want to make sure the matter is finished.",
+        "The thing I was waiting for is at my door now and the bank list has only one payment.",
+        "Everything on the page looks settled; I do not see anything that still needs to be moved.",
+        "What was missing before is here now, and I am writing only to confirm the case can end.",
+      ],
+    },
+    fluent: {
+      subjects: ["Confirm resolved status", "Refund received successfully", "No further action required"],
+      bodies: [
+        "The refund has reached my account, so no further action is required. Please mark the issue resolved.",
+        "My order arrived and the statement contains only the expected charge; I am confirming that everything is settled.",
+        "The earlier issue is resolved now. I only need confirmation that the support case is closed.",
+        "All account activity looks correct, and I do not need a refund, replacement, or delivery trace.",
+      ],
+    },
   },
-  promo_code: {
-    subjects: ["promo code not working", "discount didnt apply"],
-    bodies: ["code TEATIME says invalid at checkout", "the 10% off never applied to my order"],
-    resolutions: ["Honoured promo retroactively as account credit."],
-  },
-  address_change: {
-    subjects: ["change delivery address", "moved house"],
-    bodies: ["need to update the address before it ships", "put my old address by mistake"],
-    resolutions: ["Updated shipping address before dispatch."],
-  },
-  receipt_request: {
-    subjects: ["need invoice", "receipt for expenses"],
-    bodies: ["can you send a proper invoice for order", "need the receipt as pdf for work"],
-    resolutions: ["Emailed PDF invoice."],
-  },
-} as const;
+};
 
-type Reason = keyof typeof VOICES;
+const summaries: Record<ResolutionKind, string> = {
+  duplicate_charge: "Confirm the duplicate transaction and offer a refund of the second charge.",
+  wrong_item: "Identify the recent delivered item and offer a replacement.",
+  late_delivery: "Confirm the missed promise date and offer to trace the delivery.",
+  unexpected_renewal: "Identify the recent renewal and offer a subscription review.",
+  refund_pending: "Confirm the overdue pending refund and offer to trace it.",
+  clean_state: "Explain that the account is settled and do not propose an unsupported action.",
+};
 
-// Cluster sizes and feature co-occurrence are set so that
-// P(cluster | feature) — "when this state is present, how often is it the
-// reason for contact" — lands where severity intuition says it should:
-// duplicate charges almost always cause contact (0.90); recent deliveries
-// only sometimes do (0.70). The generator COMPUTES these; nothing downstream
-// hardcodes them.
-const PLAN: {
-  reason: Reason;
-  count: number;
-  coFeatures: Partial<Record<"dup" | "late" | "delivered" | "renewal" | "refund", number>>;
-}[] = [
-  { reason: "wrong_item", count: 112, coFeatures: { dup: 3, refund: 6 } },
-  { reason: "late_delivery", count: 72, coFeatures: { dup: 3, renewal: 6 } },
-  { reason: "duplicate_charge", count: 54, coFeatures: { delivered: 14, renewal: 6, late: 10 } },
-  { reason: "refund_pending", count: 45, coFeatures: { delivered: 10, renewal: 8 } },
-  { reason: "unexpected_renewal", count: 39, coFeatures: { delivered: 4, refund: 4 } },
-  { reason: "password_reset", count: 9, coFeatures: { delivered: 2, late: 3 } },
-  { reason: "promo_code", count: 7, coFeatures: { delivered: 2, late: 3 } },
-  { reason: "address_change", count: 6, coFeatures: { renewal: 6, refund: 5 } },
-  { reason: "receipt_request", count: 6, coFeatures: { delivered: 2, late: 2 } },
-];
+const actionByKind: Record<ResolutionKind, ActionKind> = {
+  duplicate_charge: "refund_duplicate",
+  wrong_item: "replace_item",
+  late_delivery: "trace_delivery",
+  unexpected_renewal: "review_renewal",
+  refund_pending: "trace_refund",
+  clean_state: null,
+};
 
-// Within the late_delivery cluster, the first N tickets are "arrived, but
-// late" (delivered after the promise, recently) rather than still-missing —
-// both generate contact, and the derived detector must cover both.
-const ARRIVED_LATE_PER_CLUSTER: Partial<Record<Reason, number>> = { late_delivery: 14 };
-
-function typo(s: string): string {
-  if (rand() > 0.25) return s;
-  const i = between(1, Math.max(1, s.length - 2));
-  return s.slice(0, i) + s.slice(i + 1); // dropped letter
+function createRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return (state >>> 0) / 0x1_0000_0000;
+  };
 }
 
-interface TicketState {
-  orders: unknown[];
-  charges: unknown[];
-  subscriptions: unknown[];
-  refunds: unknown[];
+const random = createRandom(SEED);
+
+function pick<T>(values: readonly T[]): T {
+  return values[Math.floor(random() * values.length)];
 }
 
-function buildState(
-  reason: Reason,
-  extras: Set<string>,
-  t: number,
-  arrivedLate: boolean
-): TicketState {
-  const state: TicketState = { orders: [], charges: [], subscriptions: [], refunds: [] };
-  const product = pick(PRODUCTS);
-  const amount = between(1400, 12800);
-  const oid = `A-${between(1000, 9999)}`;
+function isoDaysAgo(days: number, minuteOffset = 0): string {
+  return new Date(FIXED_NOW - days * DAY_MS + minuteOffset * 60_000).toISOString();
+}
 
-  const has = (f: string) =>
-    extras.has(f) ||
-    (reason === "duplicate_charge" && f === "dup") ||
-    (reason === "late_delivery" && f === "late") ||
-    (reason === "wrong_item" && f === "delivered") ||
-    (reason === "unexpected_renewal" && f === "renewal") ||
-    (reason === "refund_pending" && f === "refund");
+function dollars(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
+}
 
-  if (has("dup")) {
-    const at = t - between(1, 6) * DAY;
-    state.charges.push(
-      { id: `ch_${between(1000, 9999)}`, amount, createdAt: new Date(at).toISOString(), status: "succeeded", orderId: oid },
-      { id: `ch_${between(1000, 9999)}`, amount, createdAt: new Date(at + between(2, 55) * 60_000).toISOString(), status: "succeeded", orderId: oid }
+function interpolate(template: string, context: TextContext): string {
+  return template.replace(/\{\{(amount|item|order|plan|days)\}\}/g, (_, key: keyof TextContext) => context[key]);
+}
+
+function buildAccount(kind: ResolutionKind, serial: number): { state: AccountState; context: TextContext } {
+  const padded = serial.toString().padStart(4, "0");
+  const orderId = `S-${padded}`;
+  const amount = pick([3200, 4800, 5800, 7200, 8400, 9600]);
+  const item = pick([
+    "ceramic kettle",
+    "glass tea pot",
+    "pour-over brewer",
+    "stoneware mug set",
+    "insulated carafe",
+    "electric milk frother",
+  ]);
+  const plan = pick(["Home essentials plan", "Tea club plan", "Kitchen care plan"]);
+  const ageDays = pick([2, 3, 4, 6, 8, 9]);
+  const base: AccountState = {
+    email: `ticket-${padded}@example.invalid`,
+    name: `Fictional customer ${padded}`,
+    orders: [],
+    charges: [],
+    subscriptions: [],
+    refunds: [],
+    priorTickets: [],
+  };
+
+  if (kind === "duplicate_charge") {
+    base.orders.push({
+      id: orderId,
+      placedAt: isoDaysAgo(6),
+      status: "delivered",
+      promisedBy: isoDaysAgo(3),
+      deliveredAt: isoDaysAgo(2),
+      items: [{ sku: `SKU-${padded}`, name: item, qty: 1 }],
+      total: amount,
+    });
+    base.charges.push(
+      { id: `ch_${padded}a`, amount, createdAt: isoDaysAgo(6), status: "succeeded", orderId },
+      { id: `ch_${padded}b`, amount, createdAt: isoDaysAgo(6, 24), status: "succeeded", orderId },
     );
+  } else if (kind === "wrong_item") {
+    base.orders.push({
+      id: orderId,
+      placedAt: isoDaysAgo(6),
+      status: "delivered",
+      promisedBy: isoDaysAgo(3),
+      deliveredAt: isoDaysAgo(2),
+      items: [{ sku: `SKU-${padded}`, name: item, qty: 1 }],
+      total: amount,
+    });
+    base.charges.push({ id: `ch_${padded}`, amount, createdAt: isoDaysAgo(6), status: "succeeded", orderId });
+  } else if (kind === "late_delivery") {
+    base.orders.push({
+      id: orderId,
+      placedAt: isoDaysAgo(12),
+      status: "in_transit",
+      promisedBy: isoDaysAgo(ageDays),
+      lastTrackingAt: isoDaysAgo(2),
+      items: [{ sku: `SKU-${padded}`, name: item, qty: 1 }],
+      total: amount,
+    });
+    base.charges.push({ id: `ch_${padded}`, amount, createdAt: isoDaysAgo(12), status: "succeeded", orderId });
+  } else if (kind === "unexpected_renewal") {
+    base.subscriptions.push({
+      id: `sub_${padded}`,
+      planName: plan,
+      amount,
+      renewedAt: isoDaysAgo(2),
+      status: "active",
+    });
+  } else if (kind === "refund_pending") {
+    base.refunds.push({
+      id: `re_${padded}`,
+      amount,
+      initiatedAt: isoDaysAgo(Math.max(8, ageDays)),
+      status: "pending",
+      chargeId: `ch_${padded}`,
+    });
+  } else {
+    base.orders.push({
+      id: orderId,
+      placedAt: isoDaysAgo(30),
+      status: "delivered",
+      promisedBy: isoDaysAgo(26),
+      deliveredAt: isoDaysAgo(25),
+      items: [{ sku: `SKU-${padded}`, name: item, qty: 1 }],
+      total: amount,
+    });
+    base.charges.push({ id: `ch_${padded}`, amount, createdAt: isoDaysAgo(30), status: "succeeded", orderId });
+    base.refunds.push({
+      id: `re_${padded}`,
+      amount,
+      initiatedAt: isoDaysAgo(12),
+      settledAt: isoDaysAgo(4),
+      status: "settled",
+      chargeId: `ch_${padded}`,
+    });
   }
-  if (has("late")) {
-    if (arrivedLate) {
-      // delivered after the promise, within the last few days
-      const deliveredAt = t - between(0, 4) * DAY;
-      state.orders.push({
-        id: oid, placedAt: new Date(deliveredAt - between(6, 10) * DAY).toISOString(),
-        status: "delivered", deliveredAt: new Date(deliveredAt).toISOString(),
-        promisedBy: new Date(deliveredAt - between(1, 3) * DAY).toISOString(),
-        items: [{ sku: "SK-000", name: product, qty: 1 }], total: amount,
-      });
-    } else {
-      state.orders.push({
-        id: oid, placedAt: new Date(t - between(8, 15) * DAY).toISOString(), status: "in_transit",
-        promisedBy: new Date(t - between(1, 6) * DAY).toISOString(),
-        items: [{ sku: "SK-000", name: product, qty: 1 }], total: amount,
-      });
+
+  return {
+    state: base,
+    context: {
+      amount: dollars(amount),
+      item,
+      order: orderId,
+      plan,
+      days: String(Math.max(8, ageDays)),
+    },
+  };
+}
+
+function buildRecord(kind: ResolutionKind, indexWithinKind: number, serial: number): TicketRecord {
+  const style = styles[indexWithinKind % styles.length];
+  const { state, context } = buildAccount(kind, serial);
+  const bank = textBank[kind][style];
+  const padded = serial.toString().padStart(4, "0");
+
+  return {
+    ticketId: `POINT-${padded}`,
+    fictional: true,
+    style,
+    channel: pick(["chat", "email", "web"] as const),
+    receivedAt: isoDaysAgo(1 + (serial % 45), serial % 60),
+    customerText: {
+      subject: interpolate(pick(bank.subjects), context),
+      body: interpolate(pick(bank.bodies), context),
+    },
+    accountStateAtContact: state,
+    expectedResolution: {
+      kind,
+      detectorKind: kind === "clean_state" ? null : kind,
+      actionKind: actionByKind[kind],
+      summary: summaries[kind],
+    },
+  };
+}
+
+async function main(): Promise<void> {
+  const records: TicketRecord[] = [];
+  let serial = 1;
+
+  for (const kind of resolutionKinds) {
+    for (let index = 0; index < RECORDS_PER_KIND; index += 1) {
+      records.push(buildRecord(kind, index, serial));
+      serial += 1;
     }
   }
-  if (has("delivered")) {
-    // delivered on time (before or on the promise), recently
-    const deliveredAt = t - between(1, 12) * DAY;
-    state.orders.push({
-      id: `A-${between(1000, 9999)}`, placedAt: new Date(deliveredAt - between(3, 6) * DAY).toISOString(),
-      status: "delivered", deliveredAt: new Date(deliveredAt).toISOString(),
-      promisedBy: new Date(deliveredAt + between(0, 2) * DAY).toISOString(),
-      items: [{ sku: "SK-000", name: product, qty: 1 }], total: amount,
-    });
-  }
-  if (has("renewal")) {
-    state.subscriptions.push({
-      id: `sub_${between(100, 999)}`, planName: pick(["Tea Club, monthly", "Coffee Club, monthly"]),
-      amount: between(1200, 2400), startedAt: new Date(t - between(60, 400) * DAY).toISOString(),
-      renewedAt: new Date(t - between(0, 6) * DAY).toISOString(), status: "active",
-    });
-  }
-  if (has("refund")) {
-    state.refunds.push({
-      id: `re_${between(1000, 9999)}`, amount: between(900, 9000),
-      initiatedAt: new Date(t - between(6, 14) * DAY).toISOString(), chargeId: `ch_${between(1000, 9999)}`,
-    });
-  }
-  return state;
+
+  const corpus = {
+    schemaVersion: "wordless-ticket-corpus.v1",
+    description: "Deterministic, wholly fictional support tickets for offline rule provenance and regression evaluation.",
+    seed: `0x${SEED.toString(16).toUpperCase()}`,
+    fixedSnapshotAt: new Date(FIXED_NOW).toISOString(),
+    recordsPerKind: RECORDS_PER_KIND,
+    records,
+  };
+
+  const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
+  const outputDirectory = path.resolve(scriptDirectory, "../data");
+  await mkdir(outputDirectory, { recursive: true });
+  await writeFile(
+    path.join(outputDirectory, "ticket-corpus.json"),
+    `${JSON.stringify(corpus, null, 2)}\n`,
+    "utf8",
+  );
+
+  process.stdout.write(`Wrote ${records.length} fictional tickets to data/ticket-corpus.json\n`);
 }
 
-const tickets: unknown[] = [];
-let id = 2000;
-for (const { reason, count, coFeatures } of PLAN) {
-  // Distribute co-occurring features across distinct tickets in the cluster
-  // (sequential from a per-feature offset, so counts stay exact).
-  const coAssignments: Set<string>[] = Array.from({ length: count }, () => new Set<string>());
-  for (const [feature, n] of Object.entries(coFeatures)) {
-    if ((n ?? 0) > count) throw new Error(`coFeature ${feature} exceeds cluster ${reason}`);
-    const offset = feature.length % count;
-    for (let k = 0; k < (n ?? 0); k++) coAssignments[(offset + k) % count].add(feature);
-  }
-  const arrivedLateCount = ARRIVED_LATE_PER_CLUSTER[reason] ?? 0;
-  for (let i = 0; i < count; i++) {
-    const t = NOW - between(5, 540) * DAY;
-    const voice = VOICES[reason];
-    tickets.push({
-      id: id++,
-      createdAt: new Date(t).toISOString(),
-      subject: typo(pick([...voice.subjects])),
-      body: typo(pick([...voice.bodies])),
-      resolution: pick([...voice.resolutions]),
-      accountState: buildState(reason, coAssignments[i], t, i < arrivedLateCount),
-    });
-  }
-}
-
-// shuffle so cluster membership isn't recoverable from record order
-for (let i = tickets.length - 1; i > 0; i--) {
-  const j = Math.floor(rand() * (i + 1));
-  [tickets[i], tickets[j]] = [tickets[j], tickets[i]];
-}
-
-mkdirSync(dirname(OUT), { recursive: true });
-writeFileSync(OUT, JSON.stringify({ generatedAt: new Date(NOW).toISOString(), tickets }, null, 1));
-console.log(`Wrote ${tickets.length} tickets to ${OUT}`);
+await main();

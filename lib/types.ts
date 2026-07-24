@@ -1,8 +1,10 @@
-// The full data contract for Point.
-// AccountState is the merchant's records about their own customer — the thing
-// that is unambiguous when the person's words are not.
+export type ISODateString = string;
 
-export type OrderStatus = "processing" | "in_transit" | "delivered" | "cancelled";
+export type OrderStatus =
+  | "processing"
+  | "in_transit"
+  | "delivered"
+  | "returned";
 
 export interface OrderItem {
   sku: string;
@@ -12,48 +14,46 @@ export interface OrderItem {
 
 export interface Order {
   id: string;
-  placedAt: Date;
+  placedAt: ISODateString;
   status: OrderStatus;
-  promisedBy: Date;
-  deliveredAt?: Date;
+  promisedBy?: ISODateString;
+  deliveredAt?: ISODateString;
+  lastTrackingAt?: ISODateString;
   items: OrderItem[];
-  /** cents */
   total: number;
 }
 
 export interface Charge {
   id: string;
-  /** cents */
   amount: number;
-  createdAt: Date;
+  createdAt: ISODateString;
   status: "succeeded" | "pending" | "failed";
-  orderId?: string;
+  orderId: string;
 }
 
 export interface Subscription {
   id: string;
   planName: string;
-  /** cents */
   amount: number;
-  startedAt: Date;
-  renewedAt: Date;
-  status: "active" | "cancelled";
+  renewedAt: ISODateString;
+  status: "active" | "cancelled" | "paused";
 }
 
 export interface Refund {
   id: string;
-  /** cents */
   amount: number;
-  initiatedAt: Date;
-  settledAt?: Date;
-  chargeId: string;
+  initiatedAt: ISODateString;
+  status: "pending" | "settled" | "failed";
+  chargeId?: string;
+  settledAt?: ISODateString;
 }
 
 export interface PriorTicket {
   id: number;
   subject: string;
-  createdAt: Date;
-  status: "open" | "solved" | "closed";
+  createdAt: ISODateString;
+  status: "open" | "pending" | "solved" | "closed";
+  orderId?: string;
 }
 
 export interface AccountState {
@@ -66,96 +66,140 @@ export interface AccountState {
   priorTickets: PriorTicket[];
 }
 
-export type ActionKind =
-  | "refund_duplicate"
-  | "open_replacement"
-  | "trace_shipment"
-  | "refund_renewal"
-  | "expedite_refund"
-  | "file_ticket";
-
-export interface ActionSpec {
-  kind: ActionKind;
-  /** cents, when money moves */
-  amount?: number;
-  orderId?: string;
-  chargeId?: string;
-  subscriptionId?: string;
-  refundId?: string;
-  /** one line for the Zendesk ticket body */
-  summary: string;
-}
+export type ActionSpec =
+  | {
+      kind: "refund_duplicate";
+      label: string;
+      chargeId: string;
+      orderId: string;
+      amount: number;
+    }
+  | {
+      kind: "replace_item";
+      label: string;
+      orderId: string;
+      sku: string;
+      itemName: string;
+    }
+  | {
+      kind: "trace_delivery";
+      label: string;
+      orderId: string;
+    }
+  | {
+      kind: "review_renewal";
+      label: string;
+      subscriptionId: string;
+      amount: number;
+    }
+  | {
+      kind: "trace_refund";
+      label: string;
+      refundId: string;
+      amount: number;
+    }
+  | {
+      kind: "continue_ticket";
+      label: string;
+      ticketId: number;
+    }
+  | {
+      kind: "escalate_support";
+      label: string;
+      fragment: string;
+    };
 
 export interface Hypothesis {
   id: string;
   kind: string;
-  /** plain language, 3–7 words, second person */
   title: string;
-  /** one sentence, <20 words, with a concrete number/date/name */
   detail: string;
-  /** raw facts, shown behind the "why this?" disclosure */
   evidence: string[];
-  /** when the anomaly happened — drives the recency boost */
-  occurredAt: Date;
-  /** 0–1, how strongly this state predicts contact */
+  occurredAt: ISODateString;
   baseScore: number;
-  /** circumlocution phrasings, embedded for semantic matching */
   variants: string[];
   action: ActionSpec;
 }
 
-/** How the semantic score was obtained, most-preferred first. */
-export type MatchSource = "octen" | "precomputed" | "keyword" | "none";
+export interface RankedCandidate extends Hypothesis {
+  semanticScore: number;
+  recencyBoost: number;
+  finalScore: number;
+}
 
-/** JSON-safe hypothesis + score, as returned by /api/resolve. */
-export interface Candidate {
+export interface CandidateView {
   id: string;
   kind: string;
   title: string;
   detail: string;
   evidence: string[];
-  occurredAt: string; // ISO
-  finalScore: number;
-  scores: { base: number; recency: number; semantic: number };
-  action: ActionSpec;
+  occurredAt: ISODateString;
+  actionLabel: string;
+  actionToken: string;
 }
+
+export type ProviderSource = "fixture" | "live" | "fallback" | "skipped";
 
 export interface ResolveResponse {
-  candidates: Candidate[];
-  /** the legacy RAG agent's fluent, confident, wrong reply */
+  requestId: string;
+  email: string;
+  accountName: string;
   legacy: string;
-  matchedBy: MatchSource;
-  customer: { email: string; name: string };
+  candidates: CandidateView[];
+  status: string;
+  requestedMode: "demo" | "live";
+  mode: "demo" | "live" | "fallback";
+  providers: {
+    composio: ProviderSource;
+    octen: ProviderSource;
+    openai: ProviderSource;
+  };
 }
 
-export interface ActReceipt {
-  /** e.g. "Done. Refund of $84.00 sent." */
-  headline: string;
-  /** e.g. "Stripe refund re_demo_9002 · Zendesk ticket #4471 closed" */
+export interface ActionReceipt {
+  status: "completed" | "not_completed";
+  title: string;
   detail: string;
-  refundId?: string;
-  ticketId?: string;
-  mode: "live" | "demo";
+  reference: string;
+  source: ProviderSource;
 }
 
-// ---------------------------------------------------------------------------
-// Pipeline events — the engine surface's food supply. /api/resolve streams
-// these over SSE; the client scheduler dispatches them by `at` (auto mode)
-// or by `gate` (presenter mode). Everything the judges watch is one of these.
-// ---------------------------------------------------------------------------
+export type PipelineTool = "composio" | "octen" | "codex" | "zendesk";
 
-export type ToolName = "composio" | "octen" | "codex" | "zendesk";
-
-/** Presenter-mode step; spacebar releases one gate at a time. */
-export type Gate = "input" | "composio" | "octen" | "scoring" | "cards";
+export type PipelineStageState =
+  | "running"
+  | "done"
+  | "fixtures"
+  | "fallback"
+  | "skipped";
 
 export type PipelineEvent =
-  | { t: "stage_start"; tool: ToolName; label: string }
-  | { t: "stage_done"; tool: ToolName; ms: number; sim: boolean; summary: string }
-  | { t: "stage_skipped"; tool: ToolName; label: string }
+  | {
+      t: "stage_start";
+      tool: PipelineTool;
+      label: string;
+      source: ProviderSource;
+      state: "running";
+      simulated: boolean;
+    }
+  | {
+      t: "stage_done";
+      tool: PipelineTool;
+      ms: number;
+      summary: string;
+      source: ProviderSource;
+      state: Exclude<PipelineStageState, "running">;
+      simulated: boolean;
+    }
   | { t: "reason_head"; text: string }
   | { t: "reason_line"; text: string }
-  | { t: "evidence"; source: string; line: string; raw: object; hit: boolean }
+  | {
+      t: "evidence";
+      source: string;
+      line: string;
+      raw: Record<string, unknown>;
+      hit: boolean;
+    }
   | {
       t: "hypothesis";
       kind: string;
@@ -164,13 +208,24 @@ export type PipelineEvent =
       semantic: number;
       total: number;
       fired: boolean;
-      rank?: number;
       why: string;
     }
-  | { t: "semantic"; token: string; target: string; keyword: number; octen: number }
-  | { t: "legacy"; text: string }
-  | { t: "candidates"; cards: Candidate[]; panel: "scores" | "compare"; customer: { email: string; name: string } }
-  | { t: "error"; tool: ToolName; recovered: true };
-
-/** A pipeline event with its auto-mode offset (ms from submit) and gate. */
-export type TimedEvent = PipelineEvent & { at: number; gate: Gate };
+  | {
+      t: "semantic";
+      token: string;
+      target: string;
+      keyword: number;
+      octen: number;
+    }
+  | {
+      t: "candidates";
+      cards: CandidateView[];
+      response: ResolveResponse;
+    }
+  | {
+      t: "error";
+      tool: PipelineTool;
+      recovered: true;
+      source: "fallback";
+      state: "fallback";
+    };

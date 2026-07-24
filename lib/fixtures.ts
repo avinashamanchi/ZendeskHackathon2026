@@ -38,8 +38,8 @@ export const maria: AccountState = {
     },
   ],
   charges: [
-    { id: "ch_9001", amount: 8400, createdAt: d(6, 0, 0), status: "succeeded", orderId: "A-4471" },
-    { id: "ch_9002", amount: 8400, createdAt: d(6, 0, 12), status: "succeeded", orderId: "A-4471" },
+    { id: "ch_9001", amount: 8400, createdAt: d(6, 0, 12), status: "succeeded", orderId: "A-4471" },
+    { id: "ch_9002", amount: 8400, createdAt: d(6, 0, 0), status: "succeeded", orderId: "A-4471" },
     { id: "ch_8800", amount: 3200, createdAt: d(31), status: "succeeded", orderId: "A-4390" },
   ],
   subscriptions: [],

@@ -72,6 +72,15 @@ async function main() {
   assert(a.candidates[0].title === "You were charged twice", "card 1 title");
   assert(countWords("order wrong the thing help") === 4, "words meter reads 4");
 
+  // The generated engine is what actually runs at runtime — the golden-path
+  // order must hold through it too, not just through the hand-written rules.
+  const aGen = await rank(generated(maria), "order wrong the thing help", true);
+  assert(
+    aGen.candidates.map((c) => c.kind).join(" → ") ===
+      "duplicate_charge → wrong_item → late_delivery",
+    "generated engine preserves the golden-path order"
+  );
+
   // Path B — circumlocution. "the boily thing broke" must find the kettle.
   console.log("\nPath B — 'the boily thing broke' (maria)");
   const b = await rank(handWritten(maria), "the boily thing broke", true);

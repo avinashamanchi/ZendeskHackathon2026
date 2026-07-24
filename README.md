@@ -6,8 +6,8 @@ Two million Americans live with aphasia. In expressive aphasia, comprehension is
 intact — the person understands everything you write — but word retrieval is
 broken. Every support system on earth asks them to describe their problem first.
 
-Point inverts it. Their description is ambiguous; their account state is not.
-Point reads the merchant's own records about that customer — orders, charges,
+Wordless inverts it. Their description is ambiguous; their account state is not.
+Wordless reads the merchant's own records about that customer — orders, charges,
 refunds, subscriptions, prior tickets — works out what is actually likely wrong
 right now, and renders it as at most three large, tappable cards in plain
 language. **The user points instead of explaining.**
@@ -30,7 +30,7 @@ keys, and press `Cmd/Ctrl+D` in the app.
 
 | Path | Do this | What happens |
 |---|---|---|
-| A — golden | type `order wrong the thing help` | Left panel confidently explains the return policy. Point surfaces **You were charged twice** — a duplicate charge it was never told about. words: 4, turns: 1 |
+| A — golden | type `order wrong the thing help` | Left panel confidently explains the return policy. Wordless surfaces **You were charged twice** — a duplicate charge it was never told about. words: 4, turns: 1 |
 | B — circumlocution | type `the boily thing broke` | No keyword matches any record. Embedding similarity finds the kettle order. That's not a typo — that's what anomia sounds like. |
 | C — zero words | press **I need help** with the box empty | Cards appear anyway, ranked on account state and recency alone. words: 0, turns: 1 |
 

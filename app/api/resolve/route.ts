@@ -1,126 +1,105 @@
-import type { Candidate, TimedEvent } from "@/lib/types";
-import { fixtureFor } from "@/lib/fixtures";
-import { hypothesesFor } from "@/lib/engine";
-import { rank } from "@/lib/rank";
-import { getAccountState } from "@/lib/composio";
-import { generateCardCopy, legacyResponse } from "@/lib/llm";
-import { legacyFallback } from "@/lib/legacy-fallback";
-import { buildPipelineEvents } from "@/lib/pipeline";
+import { createClientFixtureResponse } from "@/lib/demo";
+import {
+  FIXTURE_EMAILS,
+  isFixtureEmail,
+  type FixtureEmail,
+} from "@/lib/fixtures";
+import { streamResolution } from "@/lib/pipeline";
+import type { PipelineEvent } from "@/lib/types";
 
-// POST { fragment, email, demo } → SSE stream of TimedEvents.
-// The engine surface eats these; the customer surface eats the `candidates`
-// event inside them. This route can not 500: any failure collapses to the
-// fixture-computed event list. Keys stay on this side of the wire.
+export const dynamic = "force-dynamic";
 
-export const runtime = "nodejs";
+const encoder = new TextEncoder();
 
-const ENV_DEMO_DEFAULT = process.env.NEXT_PUBLIC_DEMO_MODE !== "false";
+function cleanFragment(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return Array.from(
+    value
+      .normalize("NFKC")
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ""),
+  )
+    .slice(0, 280)
+    .join("");
+}
 
-async function polishCards(candidates: Candidate[], demoMode: boolean): Promise<Candidate[]> {
-  if (demoMode || !process.env.OPENAI_API_KEY) return candidates;
-  const polished = await Promise.all(
-    candidates.map((c) =>
-      generateCardCopy(
-        { kind: c.kind, title: c.title, detail: c.detail, evidence: c.evidence },
-        1200
-      )
-    )
-  );
-  return candidates.map((c, i) =>
-    polished[i] ? { ...c, title: polished[i]!.title, detail: polished[i]!.detail } : c
+function encodeEvent(event: PipelineEvent): Uint8Array {
+  return encoder.encode(
+    `event: ${event.t}\ndata: ${JSON.stringify(event)}\n\n`,
   );
 }
 
-async function computeEvents(
-  fragment: string,
-  email: string,
-  demoMode: boolean
-): Promise<TimedEvent[]> {
-  const t0 = Date.now();
-  const { state, source } = await getAccountState(email, demoMode);
-  const composioMs = Date.now() - t0;
-
-  const hypotheses = hypothesesFor(state);
-
-  const t1 = Date.now();
-  const [{ candidates, matchedBy }, legacy] = await Promise.all([
-    rank(hypotheses, fragment, demoMode),
-    legacyResponse(fragment, demoMode, 1500),
-  ]);
-  const octenMs = Date.now() - t1;
-
-  const t2 = Date.now();
-  const cards = await polishCards(candidates, demoMode);
-  const codexMs = Date.now() - t2;
-
-  const live = !demoMode && source === "live";
-  return buildPipelineEvents({
-    state,
-    fragment,
-    candidates: cards,
-    hypotheses,
-    legacy,
-    matchedBy,
-    sim: !live,
-    latency: live
-      ? {
-          composio: composioMs,
-          octen: matchedBy === "octen" ? octenMs : undefined,
-          codex: codexMs > 5 ? codexMs : undefined,
-        }
-      : undefined,
-    composioFromCache: !demoMode && source === "fixture",
-    octenFromCache: !demoMode && matchedBy !== "octen",
-  });
-}
-
-export async function POST(request: Request) {
+export async function POST(request: Request): Promise<Response> {
+  let email: FixtureEmail = FIXTURE_EMAILS[0];
   let fragment = "";
-  let email = "maria@example.com";
-  let demoMode = ENV_DEMO_DEFAULT;
+  let requestedDemoMode = true;
+
   try {
-    const body = await request.json();
-    if (typeof body.fragment === "string") fragment = body.fragment.slice(0, 500);
-    if (typeof body.email === "string") email = body.email.slice(0, 200);
-    if (typeof body.demo === "boolean") demoMode = body.demo;
+    const body = (await request.json()) as Record<string, unknown>;
+    if (typeof body.email === "string" && isFixtureEmail(body.email)) {
+      email = body.email;
+    }
+    fragment = cleanFragment(body.fragment);
+    requestedDemoMode = body.demoMode !== false;
   } catch {
-    // malformed body → defaults; the demo still answers
+    // A malformed request still receives the complete Maria fixture stream.
   }
 
-  let events: TimedEvent[];
-  try {
-    events = await computeEvents(fragment, email, demoMode);
-  } catch (err) {
-    console.warn("[wordless] resolve fell back to pure fixtures:", err);
-    const state = fixtureFor(email);
-    const hypotheses = hypothesesFor(state);
-    const { candidates, matchedBy } = await rank(hypotheses, fragment, true);
-    events = buildPipelineEvents({
-      state,
-      fragment,
-      candidates,
-      hypotheses,
-      legacy: legacyFallback(fragment),
-      matchedBy,
-      sim: true,
-    });
-  }
+  const pipelineController = new AbortController();
+  let cancelled = false;
+  const abortPipeline = () => pipelineController.abort();
+  if (request.signal.aborted) pipelineController.abort();
+  request.signal.addEventListener("abort", abortPipeline, { once: true });
 
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    start(controller) {
-      for (const e of events) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        for await (const event of streamResolution({
+          email,
+          fragment,
+          requestedDemoMode,
+          signal: pipelineController.signal,
+        })) {
+          if (cancelled || pipelineController.signal.aborted) return;
+          controller.enqueue(encodeEvent(event));
+        }
+      } catch (error) {
+        if (cancelled || pipelineController.signal.aborted) return;
+        console.info("[Wordless] resolve stream recovered with fixtures", error);
+        const response = createClientFixtureResponse(email, fragment);
+        controller.enqueue(
+          encodeEvent({
+            t: "error",
+            tool: "codex",
+            recovered: true,
+            source: "fallback",
+            state: "fallback",
+          }),
+        );
+        controller.enqueue(
+          encodeEvent({
+            t: "candidates",
+            cards: response.candidates,
+            response,
+          }),
+        );
+      } finally {
+        request.signal.removeEventListener("abort", abortPipeline);
+        if (!cancelled) controller.close();
       }
-      controller.enqueue(encoder.encode(`data: {"t":"end"}\n\n`));
-      controller.close();
+    },
+    cancel() {
+      cancelled = true;
+      pipelineController.abort();
+      request.signal.removeEventListener("abort", abortPipeline);
     },
   });
+
   return new Response(stream, {
+    status: 200,
     headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-store, no-transform",
+      "X-Accel-Buffering": "no",
     },
   });
 }

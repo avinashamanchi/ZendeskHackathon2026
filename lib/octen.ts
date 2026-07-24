@@ -1,129 +1,169 @@
-// Octen embeddings — the most aphasia-specific component in the build.
-// Anomia produces circumlocution: "the boily thing" for kettle. No substring
-// of that appears in any record; semantic similarity is what finds it.
-//
-// API (verified against https://docs.octen.ai/api-reference/embedding):
-//   POST {OCTEN_API_URL}/embedding
-//   headers: x-api-key
-//   body: { input: string[], model, input_type: "query" | "document" }
-//   response: { code: 0, data: { results: [{ index, embedding }] } }
-//
-// Every call has a timeout and throws cleanly; callers fall back to the
-// precomputed table / keyword matching. The user never sees a failure.
+import type { Hypothesis } from "./types";
 
-const OCTEN_URL = process.env.OCTEN_API_URL ?? "https://api.octen.ai";
-const OCTEN_MODEL = process.env.OCTEN_MODEL ?? "octen-embedding-4b";
+type OctenInputType = "query" | "document";
 
-export function octenConfigured(): boolean {
-  return Boolean(process.env.OCTEN_API_KEY);
+interface OctenEmbeddingResponse {
+  code: number;
+  msg: string;
+  data?: {
+    results?: Array<{ index: number; embedding: number[] }>;
+    model?: string;
+  };
 }
 
-export async function embedTexts(
-  texts: string[],
-  inputType: "query" | "document",
-  timeoutMs = 2200
-): Promise<number[][]> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${OCTEN_URL}/embedding`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.OCTEN_API_KEY ?? "",
-      },
-      body: JSON.stringify({ input: texts, model: OCTEN_MODEL, input_type: inputType }),
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error(`Octen HTTP ${res.status}`);
-    const json = await res.json();
-    if (json.code !== 0 || !Array.isArray(json.data?.results)) {
-      throw new Error(`Octen error: ${json.msg ?? "malformed response"}`);
-    }
-    // Align strictly by the response's index field and demand completeness —
-    // a short or sparse batch throws (callers fall back cleanly and nothing
-    // gets cached), rather than silently mis-associating vectors.
-    const byIndex = new Map<number, number[]>();
-    for (const r of json.data.results as { index: number; embedding: number[] }[]) {
-      if (Array.isArray(r.embedding) && r.embedding.length > 0) {
-        byIndex.set(r.index, r.embedding);
-      }
-    }
-    return texts.map((_, i) => {
-      const v = byIndex.get(i);
-      if (!v) throw new Error(`Octen returned no embedding for input ${i} of ${texts.length}`);
-      return v;
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-export function similarity(a: number[], b: number[]): number {
-  let dot = 0;
-  let na = 0;
-  let nb = 0;
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++) {
-    dot += a[i] * b[i];
-    na += a[i] * a[i];
-    nb += b[i] * b[i];
-  }
-  const denom = Math.sqrt(na) * Math.sqrt(nb);
-  return denom === 0 ? 0 : dot / denom;
-}
-
-// Hypothesis-document vectors, cached in memory for the life of the server.
-const docCache = new Map<string, number[]>();
-
-/**
- * Embed each hypothesis document (title + variants), reusing cached vectors.
- * One batched call covers all cache misses.
- */
-export async function embedHypothesisDocs(
-  docs: { key: string; text: string }[]
-): Promise<Map<string, number[]>> {
-  const misses = docs.filter((d) => !docCache.has(d.key));
-  if (misses.length > 0) {
-    const vectors = await embedTexts(misses.map((d) => d.text), "document");
-    // embedTexts guarantees completeness, but never cache a hole regardless —
-    // a poisoned cache entry would disable live embeddings until restart.
-    misses.forEach((d, i) => {
-      if (vectors[i]) docCache.set(d.key, vectors[i]);
-    });
-  }
-  const out = new Map<string, number[]>();
-  for (const d of docs) {
-    const v = docCache.get(d.key);
-    if (v) out.set(d.key, v);
-  }
-  return out;
-}
-
-/**
- * The precomputed similarity table — the offline guarantee for the golden
- * paths. Keyed by normalized fragment, values are per-kind similarities.
- * Tuned until Path A ranks duplicate_charge → wrong_item → late_delivery and
- * Path B ranks wrong_item first, then LOCKED. Do not retune casually.
- */
-export const PRECOMPUTED: Record<string, Record<string, number>> = {
-  "order wrong the thing help": {
-    duplicate_charge: 0.9,
-    wrong_item: 0.62,
-    late_delivery: 0.3,
-    refund_pending: 0.1,
-    unexpected_renewal: 0.05,
-  },
-  // 0.81 on the kettle is the number the stage script cites — locked.
-  "the boily thing broke": {
-    wrong_item: 0.81,
-    late_delivery: 0.2,
-    duplicate_charge: 0.15,
-    refund_pending: 0.05,
-    unexpected_renewal: 0.02,
-  },
+const DEFAULT_OCTEN_ENDPOINT = "https://api.octen.ai/embedding";
+const documentCache = new Map<string, number[][]>();
+const MODEL_MAX_DIMENSION: Record<string, number> = {
+  "octen-embedding-0.6b": 1_024,
+  "octen-embedding-4b": 2_560,
+  "octen-embedding-8b": 4_096,
 };
 
-export function normalizeFragment(fragment: string): string {
-  return fragment.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+function timeoutSignal(timeoutMs: number): AbortSignal {
+  return AbortSignal.timeout(timeoutMs);
+}
+
+function embeddingModel(): string {
+  return process.env.OCTEN_EMBEDDING_MODEL ?? "octen-embedding-4b";
+}
+
+function parseDimension(model = embeddingModel()): number {
+  const requested = Number(process.env.OCTEN_EMBEDDING_DIMENSION ?? "256");
+  const dimension = Number.isInteger(requested) && requested > 0 ? requested : 256;
+  const maximum = MODEL_MAX_DIMENSION[model];
+  if (maximum && dimension > maximum) {
+    throw new Error(`${model} supports at most ${maximum} embedding dimensions.`);
+  }
+  return dimension;
+}
+
+function configuredTimeout(): number {
+  const value = Number(process.env.OCTEN_TIMEOUT_MS ?? "5000");
+  return Number.isFinite(value) && value >= 500 && value <= 30_000
+    ? Math.round(value)
+    : 5_000;
+}
+
+function validateVectors(
+  response: OctenEmbeddingResponse,
+  expectedCount: number,
+): number[][] {
+  if (response.code !== 0 || !response.data?.results) {
+    throw new Error(`Octen rejected the embedding request: ${response.msg}`);
+  }
+
+  const ordered = [...response.data.results].sort((a, b) => a.index - b.index);
+  if (ordered.length !== expectedCount) {
+    throw new Error("Octen returned an unexpected vector count.");
+  }
+
+  const dimension = ordered[0]?.embedding.length ?? 0;
+  if (dimension === 0) {
+    throw new Error("Octen returned an empty vector.");
+  }
+
+  const vectors = ordered.map(({ embedding }, index) => {
+    if (
+      ordered[index]?.index !== index ||
+      embedding.length !== dimension ||
+      embedding.some((value) => !Number.isFinite(value))
+    ) {
+      throw new Error("Octen returned a malformed vector.");
+    }
+    return embedding;
+  });
+
+  return vectors;
+}
+
+async function requestEmbeddings(
+  input: string[],
+  inputType: OctenInputType,
+  timeoutMs: number,
+): Promise<number[][]> {
+  const apiKey = process.env.OCTEN_API_KEY;
+  if (!apiKey) {
+    throw new Error("OCTEN_API_KEY is not configured.");
+  }
+
+  const response = await fetch(
+    process.env.OCTEN_API_URL ?? DEFAULT_OCTEN_ENDPOINT,
+    {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+    },
+    body: JSON.stringify({
+      input,
+      model: embeddingModel(),
+      dimension: parseDimension(),
+      input_type: inputType,
+    }),
+      signal: timeoutSignal(timeoutMs),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Octen returned HTTP ${response.status}.`);
+  }
+
+  const payload = (await response.json()) as OctenEmbeddingResponse;
+  return validateVectors(payload, input.length);
+}
+
+export function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length === 0 || a.length !== b.length) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (let index = 0; index < a.length; index += 1) {
+    dot += a[index] * b[index];
+    normA += a[index] * a[index];
+    normB += b[index] * b[index];
+  }
+
+  if (normA === 0 || normB === 0) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+function hypothesisDocument(hypothesis: Hypothesis): string {
+  return [hypothesis.title, hypothesis.detail, ...hypothesis.variants].join(". ");
+}
+
+async function embedDocuments(
+  documents: string[],
+  timeoutMs: number,
+): Promise<number[][]> {
+  const model = embeddingModel();
+  const cacheKey = JSON.stringify([model, parseDimension(), documents]);
+  const cached = documentCache.get(cacheKey);
+  if (cached) return cached;
+
+  const vectors = await requestEmbeddings(documents, "document", timeoutMs);
+  documentCache.set(cacheKey, vectors);
+  return vectors;
+}
+
+export async function getOctenSimilarityScores(
+  fragment: string,
+  hypotheses: Hypothesis[],
+  timeoutMs = configuredTimeout(),
+): Promise<Record<string, number>> {
+  if (!fragment.trim() || hypotheses.length === 0) return {};
+
+  const documents = hypotheses.map(hypothesisDocument);
+  const [queryVectors, documentVectors] = await Promise.all([
+    requestEmbeddings([fragment], "query", timeoutMs),
+    embedDocuments(documents, timeoutMs),
+  ]);
+
+  const queryVector = queryVectors[0];
+  return Object.fromEntries(
+    hypotheses.map((hypothesis, index) => [
+      hypothesis.id,
+      Math.max(0, Math.min(1, cosineSimilarity(queryVector, documentVectors[index]))),
+    ]),
+  );
 }

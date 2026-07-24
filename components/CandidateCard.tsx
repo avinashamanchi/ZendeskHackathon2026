@@ -1,54 +1,85 @@
-"use client";
+import type { CandidateView } from "@/lib/types";
+import type { CSSProperties } from "react";
 
-import type { Candidate } from "@/lib/types";
+export type CandidateCardState = "queued" | "visible" | "acting";
 
-// DEMO-CRITICAL. A real <button>, minimum 96px tall, full column width.
-// Nothing in this file is domain-specific — every word arrives as props,
-// generated per-request from live account state. That is what separates
-// Point from an admin-authored decision tree.
+export interface CandidateCardProps {
+  candidate: CandidateView;
+  index: number;
+  disabled?: boolean;
+  state?: CandidateCardState;
+  evidenceLabel?: string;
+  hideEvidence?: boolean;
+  onChoose: (candidate: CandidateView) => void;
+  onEvidenceToggle?: (open: boolean, candidate: CandidateView) => void;
+}
 
-export default function CandidateCard({
+export function CandidateCard({
   candidate,
-  onSelect,
-  shown,
-  disabled,
-}: {
-  candidate: Candidate;
-  onSelect: (candidate: Candidate) => void;
-  shown: boolean;
-  disabled: boolean;
-}) {
+  index,
+  disabled = false,
+  state = "visible",
+  evidenceLabel = "Why this result",
+  hideEvidence = false,
+  onChoose,
+  onEvidenceToggle,
+}: CandidateCardProps) {
+  const detailId = "candidate-detail-" + candidate.id;
+  const classes = [
+    "candidate-card",
+    "candidate-card-" + state,
+  ].join(" ");
+
   return (
-    // aria-hidden while visually hidden: the staged reveal must sound the
-    // same as it looks. The button is disabled until shown, so no focusable
-    // element ever hides inside an aria-hidden subtree.
-    <div className={`card-reveal ${shown ? "is-shown" : ""}`} aria-hidden={!shown}>
+    <article
+      className={classes}
+      data-candidate-kind={candidate.kind}
+      data-candidate-rank={index + 1}
+      data-state={state}
+      style={{ "--card-index": index } as CSSProperties}
+    >
       <button
         type="button"
-        disabled={disabled || !shown}
-        onClick={() => onSelect(candidate)}
-        className="min-h-[96px] w-full rounded-lg border-2 border-[color:var(--edge-strong)] bg-card p-5 text-left transition-colors duration-[120ms] hover:border-signal hover:bg-signal-bg focus-visible:border-signal focus-visible:bg-signal-bg"
+        className="candidate-button"
+        disabled={disabled}
+        onClick={() => onChoose(candidate)}
+        aria-describedby={detailId}
+        aria-busy={state === "acting" ? "true" : undefined}
       >
-        <span className="block text-[28px] font-bold leading-tight text-ink">
-          {candidate.title}
+        <span className="candidate-number" aria-hidden="true">
+          {index + 1}
         </span>
-        <span className="mt-2 block max-w-[60ch] text-[18px] leading-[1.6] text-ink-soft">
-          {candidate.detail}
+        <span className="candidate-copy">
+          <span className="candidate-title">{candidate.title}</span>
+          <span id={detailId} className="candidate-detail">
+            {candidate.detail}
+          </span>
+          <span className="candidate-action">
+            {candidate.actionLabel}
+            <span aria-hidden="true"> →</span>
+          </span>
         </span>
       </button>
-      <details className="mt-1 px-2">
-        <summary className="flex min-h-[44px] w-fit cursor-pointer list-none items-center gap-1 rounded px-2 text-[16px] text-ink-soft [&::-webkit-details-marker]:hidden">
-          <span aria-hidden="true" className="disclosure-glyph text-[16px]">
-            ▸
-          </span>
-          why this?
-        </summary>
-        <ul className="mb-2 ml-6 list-disc space-y-1 text-[16px] leading-[1.6] text-ink-soft">
-          {candidate.evidence.map((fact) => (
-            <li key={fact}>{fact}</li>
-          ))}
-        </ul>
-      </details>
-    </div>
+      {!hideEvidence && candidate.evidence.length > 0 ? (
+        <details
+          className="evidence candidate-evidence"
+          onToggle={(event) =>
+            onEvidenceToggle?.(event.currentTarget.open, candidate)
+          }
+        >
+          <summary>
+            {evidenceLabel}
+            <span className="visually-hidden">
+              {" for " + candidate.title}
+            </span>
+          </summary>
+          <ul>
+            {candidate.evidence.map((fact, factIndex) => (
+              <li key={candidate.id + "-evidence-" + factIndex}>{fact}</li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </article>
   );
 }

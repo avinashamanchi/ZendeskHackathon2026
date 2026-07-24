@@ -1,50 +1,110 @@
-"use client";
+import type { FormEvent, RefObject } from "react";
 
-import { forwardRef } from "react";
-
-// The input asks for nothing. Any words — or none. The single big button is
-// the whole ask: "I need help" submits whatever is there, including nothing
-// (Path C). One tap target, 44px+ everywhere.
-
-type Props = {
-  value: string;
+export interface FragmentInputProps {
+  email: string;
+  fragment: string;
+  inputRef?: RefObject<HTMLInputElement | null>;
+  busy?: boolean;
+  disabled?: boolean;
+  accountName?: string;
+  identityText?: string;
+  label?: string;
+  placeholder?: string;
+  buttonLabel?: string;
+  emptyButtonLabel?: string;
+  busyLabel?: string;
+  maxLength?: number;
+  inputId?: string;
+  className?: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
-  busy: boolean;
-};
+}
 
-const FragmentInput = forwardRef<HTMLInputElement, Props>(function FragmentInput(
-  { value, onChange, onSubmit, busy },
-  ref
-) {
+export function FragmentInput({
+  email,
+  fragment,
+  inputRef,
+  busy = false,
+  disabled = false,
+  accountName,
+  identityText,
+  label = "Say any words you have",
+  placeholder = "A few words, or none",
+  buttonLabel = "Find what I mean",
+  emptyButtonLabel = "I need help",
+  busyLabel = "Reading account",
+  maxLength = 280,
+  inputId = "fragment-input",
+  className = "",
+  onChange,
+  onSubmit,
+}: FragmentInputProps) {
+  const helpId = inputId + "-help";
+  const blocked = busy || disabled;
+  const submitLabel = busy
+    ? busyLabel
+    : fragment.trim()
+      ? buttonLabel
+      : emptyButtonLabel;
+  const shownIdentity =
+    identityText ??
+    (accountName
+      ? accountName + " · " + email + " · Matched from the email already on this support request."
+      : email + " · Matched from the email already on this support request.");
+  const classes = ["request-block", className].filter(Boolean).join(" ");
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (blocked) return;
+    onSubmit();
+  }
+
   return (
-    <form
-      className="flex gap-4"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (!busy) onSubmit();
-      }}
-    >
-      <input
-        ref={ref}
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-label="What happened, in any words — or none"
-        placeholder="any words — or none"
-        autoComplete="off"
-        spellCheck={false}
-        className="min-h-[56px] flex-1 rounded-lg border-2 border-[color:var(--edge-strong)] bg-card px-5 text-[22px] text-ink"
-      />
-      <button
-        type="submit"
-        disabled={busy}
-        className="min-h-[56px] shrink-0 rounded-lg bg-signal px-7 text-[22px] font-bold text-white transition-colors duration-[120ms] hover:bg-[#163f75] disabled:opacity-[0.85]"
+    <section className={classes} aria-labelledby={inputId + "-label"}>
+      <form
+        className="request-form"
+        onSubmit={submit}
+        aria-busy={busy ? "true" : undefined}
       >
-        I need help
-      </button>
-    </form>
+        <div className="request-copy">
+          <label id={inputId + "-label"} htmlFor={inputId}>
+            {label}
+          </label>
+          <p className="identity-line">
+            <span aria-hidden="true" className="identity-mark">
+              @
+            </span>
+            <span>{shownIdentity}</span>
+          </p>
+        </div>
+        <div className="input-row">
+          <input
+            ref={inputRef}
+            id={inputId}
+            name="fragment"
+            type="text"
+            value={fragment}
+            maxLength={maxLength}
+            autoComplete="off"
+            spellCheck
+            disabled={blocked}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder={placeholder}
+            aria-describedby={helpId}
+          />
+          <button
+            className="help-button"
+            type="submit"
+            disabled={blocked}
+            aria-busy={busy ? "true" : undefined}
+          >
+            {submitLabel}
+          </button>
+        </div>
+        <p id={helpId} className="visually-hidden">
+          Enter any words you can find. You can also leave this empty and ask for help.
+        </p>
+      </form>
+    </section>
   );
-});
-
-export default FragmentInput;
+}

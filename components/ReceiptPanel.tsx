@@ -1,44 +1,54 @@
-"use client";
+import type { ActionReceipt } from "@/lib/types";
+import type { RefObject } from "react";
 
-import { useEffect, useRef } from "react";
-import type { ActReceipt } from "@/lib/types";
+export interface ReceiptPanelProps {
+  receipt: ActionReceipt;
+  headingRef?: RefObject<HTMLHeadingElement | null>;
+  onReset?: () => void;
+  resetLabel?: string;
+  className?: string;
+}
 
-// The resolution, stated plainly. Active voice, no apologies, no hedging.
-// Announcement comes from the page's persistent aria-live region; focus
-// lands on "Start again" so a keyboard-only run never strands.
-
-export default function ReceiptPanel({
+export function ReceiptPanel({
   receipt,
+  headingRef,
   onReset,
-}: {
-  receipt: ActReceipt;
-  onReset: () => void;
-}) {
-  const resetRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    resetRef.current?.focus();
-  }, []);
+  resetLabel = "Start again",
+  className = "",
+}: ReceiptPanelProps) {
+  const complete = receipt.status === "completed";
+  const classes = [
+    "receipt",
+    "receipt-panel",
+    complete ? "receipt-complete" : "receipt-stopped",
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <div className="flex flex-col items-start gap-4 pt-2">
-      <p className="flex items-start gap-3 text-[32px] font-bold leading-tight text-ink">
-        <span
-          aria-hidden="true"
-          className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-signal text-[20px] text-white"
-        >
-          ✓
-        </span>
-        {receipt.headline}
+    <div
+      className={classes}
+      data-receipt-source={receipt.source}
+      data-receipt-status={receipt.status}
+      role="status"
+    >
+      <div className="receipt-mark" aria-hidden="true">
+        {complete ? "✓" : "–"}
+      </div>
+      <p className="receipt-label">
+        {complete ? "Action complete" : "No action confirmed"}
       </p>
-      <p className="text-[16px] tabular-nums text-ink-soft">{receipt.detail}</p>
-      <button
-        ref={resetRef}
-        type="button"
-        onClick={onReset}
-        className="mt-2 min-h-[56px] rounded-lg bg-signal px-7 text-[22px] font-bold text-white transition-colors duration-[120ms] hover:bg-[#163f75]"
-      >
-        Start again
-      </button>
+      <h3 ref={headingRef} tabIndex={-1}>
+        {receipt.title}
+      </h3>
+      <p className="receipt-detail">{receipt.detail}</p>
+      <p className="receipt-reference">{receipt.reference}</p>
+      {onReset ? (
+        <button type="button" className="start-again" onClick={onReset}>
+          {resetLabel}
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -1,111 +1,145 @@
-import OpenAI from "openai";
-import type { Hypothesis } from "./types";
-import { legacyFallback } from "./legacy-fallback";
+import { z } from "zod";
+import {
+  isLockedDemoFragment,
+  LEGACY_GOLDEN_RESPONSE,
+} from "./fixtures";
+import type { Hypothesis, ProviderSource } from "./types";
 
-// OpenAI wrappers. Each has a hard timeout and a deterministic fallback —
-// the UI must proceed identically whether or not the network exists.
+const CardCopySchema = z.object({
+  cards: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string(),
+      detail: z.string(),
+    }),
+  ),
+});
 
-const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
-
-let client: OpenAI | null = null;
-function openai(): OpenAI | null {
-  if (!process.env.OPENAI_API_KEY) return null;
-  if (!client) client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  return client;
+export interface GeneratedValue<T> {
+  value: T;
+  source: ProviderSource;
 }
 
-const CARD_COPY_SYSTEM = `You write interface copy for people with expressive aphasia. They understand
-everything you write; they cannot produce words themselves. Write in plain,
-concrete, second-person language.
+async function openAIClient() {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
+  const { default: OpenAI } = await import("openai");
+  return new OpenAI({ apiKey });
+}
 
-Rules:
-- Title: 3 to 7 words. Sentence case. No question marks. No jargon.
-- Detail: exactly one sentence, under 20 words, containing the specific
-  number, date, or item name.
-- Never use: "issue", "concern", "regarding", "we apologise", "it appears".
-- Never hedge. Say what happened.
-- Return strict JSON: {"title": string, "detail": string}. No markdown,
-  no preamble.`;
+function countWords(value: string): number {
+  return value.trim().split(/\s+/).filter(Boolean).length;
+}
 
-/**
- * Polishes a card's copy. On any failure — no key, timeout, malformed JSON,
- * rule violation — returns null and the caller keeps the deterministic
- * template copy already on the hypothesis. Copy can only get better, never
- * missing.
- */
+function isValidCopy(title: string, detail: string): boolean {
+  const titleWords = countWords(title);
+  const detailWords = countWords(detail);
+  return (
+    titleWords >= 3 &&
+    titleWords <= 7 &&
+    detailWords > 0 &&
+    detailWords < 20 &&
+    !/[?]/.test(title) &&
+    !/\b(issue|concern|regarding|we apologise|it appears)\b/i.test(
+      `${title} ${detail}`,
+    )
+  );
+}
+
 export async function generateCardCopy(
-  hypothesis: Pick<Hypothesis, "kind" | "title" | "detail" | "evidence">,
-  timeoutMs = 4000
-): Promise<{ title: string; detail: string } | null> {
-  const api = openai();
-  if (!api) return null;
+  hypotheses: Hypothesis[],
+  fragment: string,
+  demoMode: boolean,
+  timeoutMs = 900,
+): Promise<GeneratedValue<Map<string, { title: string; detail: string }>>> {
+  const fallback = new Map(
+    hypotheses.map((hypothesis) => [
+      hypothesis.id,
+      { title: hypothesis.title, detail: hypothesis.detail },
+    ]),
+  );
+
+  if (demoMode || isLockedDemoFragment(fragment) || hypotheses.length === 0) {
+    return { value: fallback, source: "fixture" };
+  }
+
   try {
-    const res = await api.chat.completions.create(
+    const [client, { zodTextFormat }] = await Promise.all([
+      openAIClient(),
+      import("openai/helpers/zod"),
+    ]);
+    const response = await client.responses.parse(
       {
-        model: MODEL,
-        messages: [
-          { role: "system", content: CARD_COPY_SYSTEM },
-          {
-            role: "user",
-            content:
-              `What happened (${hypothesis.kind}): ${hypothesis.title}. ${hypothesis.detail}\n` +
-              `Facts:\n${hypothesis.evidence.join("\n")}`,
-          },
-        ],
-        response_format: { type: "json_object" },
-        max_tokens: 120,
+        model: process.env.OPENAI_MODEL ?? "gpt-5.6-luna",
+        reasoning: { effort: "none" },
+        instructions: `You write interface copy for people with expressive aphasia. They understand what they read but may not be able to retrieve words.
+
+Rewrite each supplied candidate without changing any fact.
+- Title: 3 to 7 words, sentence case, second person when natural, no question mark.
+- Detail: exactly one sentence, under 20 words, with the supplied number, date, order, or item.
+- Use concrete everyday words and active voice.
+- Never use: issue, concern, regarding, we apologise, it appears.
+- Never add a fact and never remove the candidate id.`,
+        input: JSON.stringify(
+          hypotheses.map(({ id, title, detail }) => ({ id, title, detail })),
+        ),
+        text: { format: zodTextFormat(CardCopySchema, "wordless_card_copy") },
+        max_output_tokens: 600,
       },
-      { timeout: timeoutMs, maxRetries: 0 }
+      { signal: AbortSignal.timeout(timeoutMs) },
     );
-    const parsed = JSON.parse(res.choices[0]?.message?.content ?? "");
-    const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
-    const detail = typeof parsed.detail === "string" ? parsed.detail.trim() : "";
-    const titleWords = title.split(/\s+/).length;
-    const detailWords = detail.split(/\s+/).length;
-    if (!title || !detail || titleWords < 3 || titleWords > 7 || detailWords >= 20) {
-      return null; // violates the copy contract — keep the template
+
+    const parsed = response.output_parsed;
+    if (!parsed || parsed.cards.length !== hypotheses.length) {
+      throw new Error("OpenAI returned an incomplete card set.");
     }
-    return { title, detail };
-  } catch (err) {
-    console.warn("[point] card copy generation failed, keeping template:", err);
-    return null;
+
+    const generated = new Map<string, { title: string; detail: string }>();
+    for (const card of parsed.cards) {
+      if (!fallback.has(card.id) || !isValidCopy(card.title, card.detail)) {
+        throw new Error("OpenAI returned copy outside the accessibility contract.");
+      }
+      generated.set(card.id, { title: card.title, detail: card.detail });
+    }
+
+    if (generated.size !== fallback.size) {
+      throw new Error("OpenAI changed a candidate id.");
+    }
+    return { value: generated, source: "live" };
+  } catch (error) {
+    console.info("[Wordless] OpenAI card copy fallback", error);
+    return { value: fallback, source: "fallback" };
   }
 }
 
-const LEGACY_SYSTEM = `You are a typical AI customer support agent backed by a knowledge base. You
-answer confidently from the closest-matching help article. You never say you
-are unsure and you never ask what the user means. Given the user's message,
-produce a short confident support reply (2-3 sentences) answering the nearest
-plausible topic. Do not ask clarifying questions.`;
-
-/**
- * Simulates a normal RAG support agent: fluent, confident, wrong.
- * DEMO-CRITICAL — the left panel of the contrast. Falls back to canned
- * replies so the gap always lands, network or not.
- */
 export async function legacyResponse(
   fragment: string,
   demoMode: boolean,
-  timeoutMs = 4000
-): Promise<string> {
-  const api = openai();
-  if (demoMode || !api || fragment.trim() === "") return legacyFallback(fragment);
+  timeoutMs = 900,
+): Promise<GeneratedValue<string>> {
+  if (demoMode || isLockedDemoFragment(fragment)) {
+    return { value: LEGACY_GOLDEN_RESPONSE, source: "fixture" };
+  }
+
   try {
-    const res = await api.chat.completions.create(
+    const client = await openAIClient();
+    const response = await client.responses.create(
       {
-        model: MODEL,
-        messages: [
-          { role: "system", content: LEGACY_SYSTEM },
-          { role: "user", content: fragment },
-        ],
-        max_tokens: 140,
+        model: process.env.OPENAI_MODEL ?? "gpt-5.6-luna",
+        reasoning: { effort: "none" },
+        instructions:
+          "You are a typical knowledge-base customer support agent. Answer confidently from the closest plausible help article. Never say you are unsure and never ask a clarifying question. Write 2–3 short sentences.",
+        input: fragment || "I need help.",
+        max_output_tokens: 180,
       },
-      { timeout: timeoutMs, maxRetries: 0 }
+      { signal: AbortSignal.timeout(timeoutMs) },
     );
-    const text = res.choices[0]?.message?.content?.trim();
-    return text && text.length > 0 ? text : legacyFallback(fragment);
-  } catch (err) {
-    console.warn("[point] legacy simulation failed, using fallback:", err);
-    return legacyFallback(fragment);
+
+    const value = response.output_text.trim();
+    if (!value) throw new Error("OpenAI returned empty legacy copy.");
+    return { value, source: "live" };
+  } catch (error) {
+    console.info("[Wordless] OpenAI legacy fallback", error);
+    return { value: LEGACY_GOLDEN_RESPONSE, source: "fallback" };
   }
 }

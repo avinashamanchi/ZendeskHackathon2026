@@ -1,0 +1,117 @@
+{
+  "schemaVersion": "wordless-rule-generation-report.v1",
+  "generator": "scripts/generate-rules.ts",
+  "mode": "deterministic-offline",
+  "networkAccess": "none",
+  "runtimeCorpusDependency": false,
+  "status": "passed",
+  "inputs": {
+    "corpus": "data/ticket-corpus.json",
+    "types": "lib/types.ts",
+    "detectorCatalogue": "lib/hypotheses.generated.ts",
+    "corpusSeed": "0x574F5244",
+    "fixedSnapshotAt": "2026-04-15T12:00:00.000Z",
+    "corpusSha256": "d6ec7895137f517fa3b9aafa91166a15447238808a57be4d0a155f1f958d030d",
+    "typesSha256": "aeb4c0237d1e0a61b90111d0602a6ce24a18f8327055b10f2e14057194e6468c",
+    "detectorSourceSha256": "6cba73dd4da587a1cf7121c33fd0bba1fbc0fcf35080a1f49d522d14290d39bc"
+  },
+  "validation": {
+    "minimumRecords": 360,
+    "totalRecords": 384,
+    "uniqueTicketIds": 384,
+    "allRecordsExplicitlyFictional": true,
+    "fictionalEmailDomain": "example.invalid",
+    "expectedStyles": [
+      "fragment",
+      "misspelling",
+      "circumlocution",
+      "fluent"
+    ],
+    "rules": [
+      {
+        "resolutionKind": "duplicate_charge",
+        "detectorKind": "duplicate_charge",
+        "actionKind": "refund_duplicate",
+        "count": 64,
+        "styles": {
+          "fragment": 16,
+          "misspelling": 16,
+          "circumlocution": 16,
+          "fluent": 16
+        }
+      },
+      {
+        "resolutionKind": "wrong_item",
+        "detectorKind": "wrong_item",
+        "actionKind": "replace_item",
+        "count": 64,
+        "styles": {
+          "fragment": 16,
+          "misspelling": 16,
+          "circumlocution": 16,
+          "fluent": 16
+        }
+      },
+      {
+        "resolutionKind": "late_delivery",
+        "detectorKind": "late_delivery",
+        "actionKind": "trace_delivery",
+        "count": 64,
+        "styles": {
+          "fragment": 16,
+          "misspelling": 16,
+          "circumlocution": 16,
+          "fluent": 16
+        }
+      },
+      {
+        "resolutionKind": "unexpected_renewal",
+        "detectorKind": "unexpected_renewal",
+        "actionKind": "review_renewal",
+        "count": 64,
+        "styles": {
+          "fragment": 16,
+          "misspelling": 16,
+          "circumlocution": 16,
+          "fluent": 16
+        }
+      },
+      {
+        "resolutionKind": "refund_pending",
+        "detectorKind": "refund_pending",
+        "actionKind": "trace_refund",
+        "count": 64,
+        "styles": {
+          "fragment": 16,
+          "misspelling": 16,
+          "circumlocution": 16,
+          "fluent": 16
+        }
+      },
+      {
+        "resolutionKind": "clean_state",
+        "detectorKind": null,
+        "actionKind": null,
+        "count": 64,
+        "styles": {
+          "fragment": 16,
+          "misspelling": 16,
+          "circumlocution": 16,
+          "fluent": 16
+        }
+      }
+    ],
+    "checks": [
+      "corpus schema and mappings",
+      "minimum records per resolution kind",
+      "language-style coverage per resolution kind",
+      "ActionSpec literals in lib/types.ts",
+      "detector literals in lib/hypotheses.generated.ts",
+      "clean-state non-detector invariant"
+    ]
+  },
+  "outputs": {
+    "provenance": "lib/rule-provenance.generated.ts",
+    "report": "data/rule-generation-report.json"
+  }
+}

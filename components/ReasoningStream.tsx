@@ -1,102 +1,101 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import type { ReasonItem } from "@/lib/reasoning";
-import { REASON } from "@/lib/timing";
+import { useEffect, useMemo, useRef } from "react";
 
-// DEMO-CRITICAL — the star of the engine zone. Streams the narration
-// character by character at read-aloud pace (§9.6). Completed lines dim to
-// 65%; a block cursor blinks at the write position; auto-scroll keeps the
-// cursor ~2 lines above the bottom edge. Reduced motion: whole lines land
-// instantly but keep the line-by-line pacing.
-//
-// Lives inside the aria-hidden engine zone — visual only, by design (§15).
+export type ReasoningEntryKind = "heading" | "line";
+export type ReasoningEntryState = "complete" | "current" | "queued";
 
-export default function ReasoningStream({
-  items,
-  runId,
-}: {
-  items: ReasonItem[];
-  runId: number;
-}) {
-  const [idx, setIdx] = useState(0);
-  const [chars, setChars] = useState(0);
-  const boxRef = useRef<HTMLDivElement>(null);
+export interface ReasoningEntry {
+  id: string;
+  kind: ReasoningEntryKind;
+  text: string;
+  state?: ReasoningEntryState;
+}
+
+export interface ReasoningStreamProps {
+  entries: readonly ReasoningEntry[];
+  title?: string;
+  emptyText?: string;
+  showCursor?: boolean;
+  autoScroll?: boolean;
+  className?: string;
+}
+
+export function ReasoningStream({
+  entries,
+  title = "Reasoning",
+  emptyText = "Waiting for the account.",
+  showCursor = true,
+  autoScroll = true,
+  className = "",
+}: ReasoningStreamProps) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const contentKey = useMemo(
+    () =>
+      entries
+        .map((entry) => [entry.id, entry.kind, entry.state, entry.text].join(":"))
+        .join("|"),
+    [entries],
+  );
 
   useEffect(() => {
-    setIdx(0);
-    setChars(0);
-  }, [runId]);
+    const viewport = viewportRef.current;
+    if (!autoScroll || !viewport) return;
 
-  useEffect(() => {
-    if (idx >= items.length) return;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const item = items[idx];
-    let timer: ReturnType<typeof setTimeout>;
-    if (item.kind === "head") {
-      timer = setTimeout(() => {
-        setIdx((i) => i + 1);
-        setChars(0);
-      }, REASON.HEAD_FADE_MS + REASON.HEAD_PAUSE_MS);
-    } else if (reduced || chars >= item.text.length) {
-      timer = setTimeout(() => {
-        setIdx((i) => i + 1);
-        setChars(0);
-      }, REASON.LINE_PAUSE_MS);
-    } else {
-      timer = setTimeout(() => setChars((c) => c + 1), REASON.CHAR_MS);
-    }
-    return () => clearTimeout(timer);
-  }, [idx, chars, items]);
+    const frame = window.requestAnimationFrame(() => {
+      const reducedMotion = window.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
+      viewport.scrollTo({
+        top: viewport.scrollHeight,
+        behavior: reducedMotion ? "auto" : "smooth",
+      });
+    });
 
-  // keep the cursor in view — smooth, not jumpy
-  useEffect(() => {
-    const box = boxRef.current;
-    if (box) box.scrollTop = box.scrollHeight - box.clientHeight;
-  }, [idx, chars]);
+    return () => window.cancelAnimationFrame(frame);
+  }, [autoScroll, contentKey]);
 
-  const reduced =
-    typeof window !== "undefined" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const classes = ["reasoning-stream", className].filter(Boolean).join(" ");
+  const currentEntryId = [...entries]
+    .reverse()
+    .find((entry) => entry.state === "current")?.id;
 
   return (
-    <div
-      ref={boxRef}
-      className="h-full overflow-y-auto pb-[3.5em] pr-4"
-      style={{ scrollBehavior: "auto" }}
-    >
-      <div className="max-w-[62ch] text-[15px] leading-[1.75] text-[color:var(--engine-ink)]">
-        {items.slice(0, idx + 1).map((item, i) => {
-          const isCurrent = i === idx;
-          if (item.kind === "head") {
-            return (
-              <p
-                key={i}
-                className="head-fade mb-1 mt-4 text-[12px] uppercase tracking-[0.14em] text-[color:var(--engine-dim)] first:mt-0"
-              >
-                {item.text}
-              </p>
-            );
-          }
-          const text = isCurrent && !reduced ? item.text.slice(0, chars) : item.text;
-          const done = !isCurrent || chars >= item.text.length;
-          return (
-            <p key={i} className={done && !isCurrent ? "opacity-65" : ""}>
-              {text}
-              {isCurrent ? (
-                <span aria-hidden="true" className="reason-cursor">
-                  ▋
-                </span>
-              ) : null}
-            </p>
-          );
-        })}
-        {idx >= items.length && items.length > 0 ? (
-          <span aria-hidden="true" className="reason-cursor">
-            ▋
-          </span>
-        ) : null}
+    <section className={classes} aria-label={title}>
+      <div className="engine-panel-heading">
+        <h3>{title}</h3>
+        <span className="reasoning-state">
+          {entries.length > 0 ? "live trace" : "waiting"}
+        </span>
       </div>
-    </div>
+      <div className="reasoning-viewport" ref={viewportRef}>
+        {entries.length === 0 ? (
+          <p className="reasoning-empty">{emptyText}</p>
+        ) : (
+          <div className="reasoning-lines">
+            {entries.map((entry) => {
+              const state = entry.state ?? "complete";
+              const current = entry.id === currentEntryId;
+              const entryClasses = [
+                "reasoning-entry",
+                "reasoning-" + entry.kind,
+                "reasoning-" + state,
+              ].join(" ");
+
+              return (
+                <p className={entryClasses} data-state={state} key={entry.id}>
+                  <span>{entry.text}</span>
+                  {current && showCursor && entry.kind === "line" ? (
+                    <span className="reasoning-cursor" aria-hidden="true">
+                      ▋
+                    </span>
+                  ) : null}
+                </p>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }

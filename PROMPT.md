@@ -1,4 +1,8 @@
-# BUILD PROMPT — "Point" (Reworked)
+# BUILD PROMPT — "Point" (v1, superseded)
+
+> The shipped product is **Wordless** — the v2 build prompt (two-layer surface,
+> SSE pipeline, reasoning stream, presenter mode) was applied on top of this
+> spec. This file is kept as the v1 design rationale.
 
 **Support that reads the account, not the sentence.**
 

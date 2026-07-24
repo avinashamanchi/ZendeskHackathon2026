@@ -1,4 +1,4 @@
-# Point
+# Wordless
 
 **Support that reads the account, not the sentence.**
 

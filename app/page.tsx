@@ -61,9 +61,13 @@ export default function Home() {
 
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Bumped on every reset/cycle; in-flight fetch continuations compare
+  // against it so a stale response can never revive a dismissed reveal.
+  const generation = useRef(0);
   const email = DEMO_CYCLE[customerIdx];
 
   const clearTimers = useCallback(() => {
+    generation.current++;
     timers.current.forEach(clearTimeout);
     timers.current = [];
   }, []);
@@ -83,6 +87,7 @@ export default function Home() {
   const submit = useCallback(
     async (fragment: string) => {
       clearTimers();
+      const gen = generation.current;
       setPhase("revealing");
       setReceipt(null);
       setResult(null);
@@ -103,6 +108,7 @@ export default function Home() {
         console.warn("[point] resolve API unreachable, resolving locally:", err);
         res = await localResolve(fragment, email);
       }
+      if (gen !== generation.current) return; // reset/cycle happened mid-flight
       setResult(res);
 
       const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -128,6 +134,7 @@ export default function Home() {
   const selectCandidate = useCallback(
     async (candidate: Candidate) => {
       if (phase === "receipt") return;
+      const gen = generation.current;
       setPhase("receipt");
       let r: ActReceipt;
       try {
@@ -140,6 +147,7 @@ export default function Home() {
         console.warn("[point] act API unreachable, demo receipt:", err);
         r = demoReceipt(candidate.action, "demo");
       }
+      if (gen !== generation.current) return; // reset/cycle happened mid-flight
       setReceipt(r);
     },
     [phase, email, demoMode]
